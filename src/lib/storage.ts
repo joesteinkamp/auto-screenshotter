@@ -4,7 +4,7 @@
  */
 
 import { openDB, type IDBPDatabase } from "idb";
-import type { ExtensionSettings } from "../types";
+import type { AiProvider, ExtensionSettings, ProviderSettings } from "../types";
 
 const DB_NAME = "auto-screenshotter";
 const DB_VERSION = 1;
@@ -51,19 +51,64 @@ export async function clearScreenshots(): Promise<void> {
 
 const SETTINGS_KEY = "settings";
 
+const EMPTY_PROVIDER: ProviderSettings = { apiKey: "", model: "" };
+
 const DEFAULT_SETTINGS: ExtensionSettings = {
-  anthropicApiKey: "",
+  aiProvider: "anthropic",
+  providers: {
+    anthropic: { ...EMPTY_PROVIDER },
+    openai: { ...EMPTY_PROVIDER },
+    gemini: { ...EMPTY_PROVIDER },
+  },
   defaultMaxPages: 50,
   defaultMaxDepth: 4,
   defaultRequestDelayMs: 1000,
 };
 
+/**
+ * Merge persisted settings with defaults and migrate the legacy
+ * `anthropicApiKey` field into the new provider map if present.
+ */
+function normalizeSettings(raw: Partial<ExtensionSettings> | undefined): ExtensionSettings {
+  const merged: ExtensionSettings = {
+    ...DEFAULT_SETTINGS,
+    ...(raw ?? {}),
+    providers: {
+      anthropic: { ...DEFAULT_SETTINGS.providers.anthropic, ...(raw?.providers?.anthropic ?? {}) },
+      openai: { ...DEFAULT_SETTINGS.providers.openai, ...(raw?.providers?.openai ?? {}) },
+      gemini: { ...DEFAULT_SETTINGS.providers.gemini, ...(raw?.providers?.gemini ?? {}) },
+    },
+  };
+
+  // Legacy migration: if an old install had `anthropicApiKey` at the root
+  // and the new nested field is empty, copy it across.
+  if (raw?.anthropicApiKey && !merged.providers.anthropic.apiKey) {
+    merged.providers.anthropic.apiKey = raw.anthropicApiKey;
+  }
+  delete merged.anthropicApiKey;
+
+  return merged;
+}
+
 export async function getSettings(): Promise<ExtensionSettings> {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
-  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] ?? {}) };
+  return normalizeSettings(result[SETTINGS_KEY]);
 }
 
 export async function saveSettings(settings: Partial<ExtensionSettings>): Promise<void> {
   const current = await getSettings();
-  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...current, ...settings } });
+  const next: ExtensionSettings = {
+    ...current,
+    ...settings,
+    providers: {
+      ...current.providers,
+      ...(settings.providers ?? {}),
+    },
+  };
+  await chrome.storage.local.set({ [SETTINGS_KEY]: next });
+}
+
+/** Convenience: get the API key for a specific provider. */
+export function getProviderApiKey(settings: ExtensionSettings, provider: AiProvider): string {
+  return settings.providers[provider]?.apiKey ?? "";
 }

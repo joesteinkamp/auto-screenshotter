@@ -31,7 +31,16 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
     });
   }, []);
 
-  const llmAvailable = !!defaults?.anthropicApiKey;
+  const selectedProvider = defaults?.aiProvider;
+  const llmAvailable = !!(
+    selectedProvider && defaults?.providers?.[selectedProvider]?.apiKey
+  );
+  const providerLabel: Record<NonNullable<typeof selectedProvider>, string> = {
+    anthropic: "Claude",
+    openai: "OpenAI",
+    gemini: "Gemini",
+  };
+  const llmLabel = selectedProvider ? providerLabel[selectedProvider] : "AI";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,7 +119,10 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
         <label htmlFor="same-origin">Same origin only</label>
       </div>
 
-      <div className="checkbox-row" title={llmAvailable ? "" : "Add an Anthropic API key in Settings to enable"}>
+      <div
+        className="checkbox-row"
+        title={llmAvailable ? "" : "Add an API key for your chosen provider in Settings to enable"}
+      >
         <input
           id="use-llm"
           type="checkbox"
@@ -119,7 +131,7 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
           disabled={disabled || !llmAvailable}
         />
         <label htmlFor="use-llm">
-          Use Claude to rank pages {!llmAvailable && <em>(needs API key)</em>}
+          Use {llmLabel} to rank pages {!llmAvailable && <em>(needs API key)</em>}
         </label>
       </div>
 

@@ -77,9 +77,26 @@ export type BackgroundResponse =
 export type PopupEvent =
   | { type: "state/update"; state: CrawlState };
 
+export type AiProvider = "anthropic" | "openai" | "gemini";
+
+export interface ProviderSettings {
+  /** API key for this provider. Empty string means "not configured". */
+  apiKey: string;
+  /** Optional model override; when empty the provider's default is used. */
+  model: string;
+}
+
 export interface ExtensionSettings {
-  anthropicApiKey: string;
+  /** Which provider to call when "Use AI to rank pages" is enabled. */
+  aiProvider: AiProvider;
+  /** Per-provider API keys and model overrides. */
+  providers: Record<AiProvider, ProviderSettings>;
   defaultMaxPages: number;
   defaultMaxDepth: number;
   defaultRequestDelayMs: number;
+  /**
+   * @deprecated Use `providers.anthropic.apiKey` instead. Kept for one-shot
+   * migration from older installs.
+   */
+  anthropicApiKey?: string;
 }

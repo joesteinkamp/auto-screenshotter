@@ -214,13 +214,16 @@ export async function startCrawl(options: CrawlOptions): Promise<void> {
           llmRefined = true;
           try {
             const settings = await getSettings();
-            if (settings.anthropicApiKey) {
+            const providerCfg = settings.providers[settings.aiProvider];
+            if (providerCfg?.apiKey) {
               const topForLlm = [...fresh].sort((a, b) => b.score - a.score).slice(0, 20);
               const refined = await refineWithLlm({
                 siteUrl: options.startUrl,
                 homepageTitle: page.title,
                 links: topForLlm,
-                apiKey: settings.anthropicApiKey,
+                provider: settings.aiProvider,
+                apiKey: providerCfg.apiKey,
+                model: providerCfg.model || undefined,
               });
               const merged = mergeScores(fresh, refined);
               for (const link of merged) queue.push(link);

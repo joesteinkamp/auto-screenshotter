@@ -10,6 +10,10 @@ export default function ProgressView({ state, onCancel, onDownload }: Props) {
   const { status, pages } = state;
   const isRunning = status.state === "running";
   const canDownload = pages.length > 0 && !isRunning;
+  const totalScreenshots = pages.reduce(
+    (sum, p) => sum + (p.blobKeys?.length || 1),
+    0,
+  );
 
   return (
     <div className="section">
@@ -17,7 +21,7 @@ export default function ProgressView({ state, onCancel, onDownload }: Props) {
         <div>
           <StatusBadge state={status.state} />
           <span style={{ marginLeft: 8 }}>
-            {pages.length} captured
+            {totalScreenshots} captured
             {isRunning && status.state === "running" && ` · ${status.queueSize} in queue`}
           </span>
         </div>

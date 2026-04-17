@@ -9,7 +9,7 @@ import type { AiProvider, ScoredLink } from "../types";
 export const DEFAULT_MODELS: Record<AiProvider, string> = {
   anthropic: "claude-haiku-4-5-20251001",
   openai: "gpt-4o-mini",
-  gemini: "gemini-2.0-flash",
+  gemini: "gemini-2.5-flash",
 };
 
 const SYSTEM_PROMPT = `You rank URLs by how important they are for understanding a website's main product flow.

@@ -2,7 +2,7 @@
 
 A Chrome extension that crawls a website, screenshots the pages that matter, and exports them as a ZIP.
 
-The core idea: screenshotting _every_ page is noisy. This extension ranks each discovered link with a hybrid scorer (URL patterns, anchor text, DOM context, depth) and optionally an AI pass (Anthropic Claude, OpenAI, or Google Gemini), so it prioritizes the main product flow — homepage, signup, login, dashboard, pricing, settings — and skips the boilerplate (privacy, terms, cookies, sitemap).
+The core idea: screenshotting _every_ page is noisy. This extension ranks each discovered link with a hybrid scorer (URL patterns, anchor text, DOM context, depth) so it prioritizes the main product flow — homepage, signup, login, dashboard, pricing, settings — and skips the boilerplate (privacy, terms, cookies, sitemap). Optionally, AI vision (Anthropic Claude, OpenAI, or Google Gemini) can be used to detect and capture dynamic page states like dropdown menus, accordions, and hamburger menus.
 
 ## Install (dev)
 
@@ -22,7 +22,7 @@ Then in Chrome:
 1. Click the extension icon
 2. Enter a start URL (or use the active tab's URL, which is pre-filled)
 3. Optional: adjust max pages, max depth, same-origin toggle, request delay
-4. Optional: pick a provider in **Settings** (Anthropic, OpenAI, or Gemini), paste its API key, then enable **Use &lt;provider&gt; to rank pages** on the main form
+4. Optional: pick a provider in **Settings** (Anthropic, OpenAI, or Gemini), paste its API key, then enable **Capture menus & dynamic page states (needs AI key)** on the main form
 5. Click **Start Crawl**
 6. When the crawl completes or is cancelled, click **Download ZIP**
 
@@ -40,15 +40,15 @@ The ZIP contains numbered PNGs (in crawl order) plus a `manifest.json` with each
 
 A priority queue drives the crawl — highest-scored links visited first. Score threshold for enqueueing is 0 by default.
 
-**Optional AI refiner** — when enabled, after the homepage is captured, the top ~20 discovered links are sent to the selected provider for a re-rank. Scores are merged 40% heuristic / 60% LLM. Failures fall back silently to pure heuristics.
+**Optional AI dynamic state capture** — when enabled, after each page screenshot the extension sends the viewport image to the selected AI provider's vision API. The model identifies interactive elements (dropdown menus, hamburger icons, accordions, tabs, toggles) and returns their locations. The crawler then clicks each one, waits for animations, captures the resulting UI state, and includes those state screenshots in the ZIP alongside the main page screenshots.
 
 Supported providers and default models:
 
 | Provider  | Default model              | Notes                                      |
 | --------- | -------------------------- | ------------------------------------------ |
-| Anthropic | `claude-haiku-4-5-20251001`| Uses system-prompt caching for cheap reruns |
-| OpenAI    | `gpt-4o-mini`              | Uses `response_format: json_object`         |
-| Gemini    | `gemini-2.0-flash`         | Uses `responseMimeType: application/json`   |
+| Anthropic | `claude-haiku-4-5-20251001`| Vision API with base64 image input          |
+| OpenAI    | `gpt-4o-mini`              | Vision via `image_url` content part         |
+| Gemini    | `gemini-2.5-flash`         | Vision via `inlineData` part                |
 
 Each provider's API key (and an optional model override) is stored locally in `chrome.storage.local`. Keys are sent directly from the extension to the provider's API — nothing proxies through a server.
 
@@ -62,7 +62,9 @@ Each provider's API key (and an optional model override) is stored locally in `c
 - `src/content/pre-capture.ts` — dismisses cookie banners and modals before capture
 - `src/content/page-measure.ts` — scroll geometry + sticky-element hiding
 - `src/scoring/heuristics.ts` + `patterns.ts` — rule-based scorer
-- `src/scoring/llm-refiner.ts` — optional AI pass (Anthropic / OpenAI / Gemini)
+- `src/scoring/vision-analyzer.ts` — AI vision analysis for interactive element detection
+- `src/scoring/llm-refiner.ts` — legacy AI pass (no longer called, kept for reference)
+- `src/content/interact-and-capture.ts` — content scripts for clicking elements by selector/coordinates
 - `src/popup/` — React popup UI
 - `src/lib/` — queue, storage (IndexedDB via `idb`), URL utils, typed messaging
 

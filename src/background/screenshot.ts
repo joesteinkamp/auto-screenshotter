@@ -8,6 +8,7 @@
  */
 
 import { measurePage, scrollToY, hideStickyElements, unhideStickyElements } from "../content/page-measure";
+import type { ScrollBehavior } from "../types";
 
 const CAPTURE_QUALITY = 92;
 /** Chrome's captureVisibleTab is rate-limited; pace calls. */
@@ -54,11 +55,17 @@ async function captureViewport(windowId: number): Promise<Blob> {
 }
 
 /**
- * Capture the full scrollable height of a tab as a single PNG blob.
+ * Capture screenshots based on scroll behavior.
  */
-export async function captureFullPage(tabId: number, windowId: number): Promise<Blob> {
+export async function captureFullPage(tabId: number, windowId: number, behavior: ScrollBehavior = "combine"): Promise<Blob[]> {
   const metrics = await execInTab(tabId, measurePage);
   const { scrollHeight, innerHeight, innerWidth, devicePixelRatio } = metrics;
+
+  if (behavior === "none") {
+    // Just capture current top-level viewport
+    const tile = await captureViewport(windowId);
+    return [tile];
+  }
 
   // Safety cap — pages can be extremely tall (infinite scroll).
   // Cap stitched height at 20,000 CSS px to avoid giant canvases.
@@ -68,9 +75,10 @@ export async function captureFullPage(tabId: number, windowId: number): Promise<
   const canvasWidth = Math.round(innerWidth * devicePixelRatio);
   const canvasHeight = Math.round(effectiveHeight * devicePixelRatio);
 
+  const tiles: Blob[] = [];
   const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("OffscreenCanvas 2D context unavailable");
+  if (behavior === "combine" && !ctx) throw new Error("OffscreenCanvas 2D context unavailable");
 
   let stickyStyleId: string | null = null;
 
@@ -79,9 +87,14 @@ export async function captureFullPage(tabId: number, windowId: number): Promise<
     await execInTabWithArg(tabId, scrollToY, 0);
     await new Promise((r) => setTimeout(r, 200));
     const firstTile = await captureViewport(windowId);
-    const firstBitmap = await createImageBitmap(firstTile);
-    ctx.drawImage(firstBitmap, 0, 0);
-    firstBitmap.close();
+    
+    if (behavior === "separate") {
+      tiles.push(firstTile);
+    } else {
+      const firstBitmap = await createImageBitmap(firstTile);
+      ctx!.drawImage(firstBitmap, 0, 0);
+      firstBitmap.close();
+    }
 
     // Subsequent tiles: hide sticky so fixed headers don't repeat
     let y = innerHeight;
@@ -93,26 +106,31 @@ export async function captureFullPage(tabId: number, windowId: number): Promise<
       await new Promise((r) => setTimeout(r, 200));
 
       const tile = await captureViewport(windowId);
-      const bitmap = await createImageBitmap(tile);
-
-      const destY = Math.round(y * devicePixelRatio);
-      const tileHeightPx = bitmap.height;
-      // If this is the last partial tile and overlaps, trim from top
-      const remainingCssPx = effectiveHeight - y;
-      const remainingDevicePx = Math.round(remainingCssPx * devicePixelRatio);
-      const srcY = tileHeightPx - remainingDevicePx;
-
-      if (srcY > 0 && remainingDevicePx < tileHeightPx) {
-        // Partial final tile
-        ctx.drawImage(
-          bitmap,
-          0, srcY, bitmap.width, remainingDevicePx,
-          0, destY, bitmap.width, remainingDevicePx,
-        );
+      
+      if (behavior === "separate") {
+        tiles.push(tile);
       } else {
-        ctx.drawImage(bitmap, 0, destY);
+        const bitmap = await createImageBitmap(tile);
+
+        const destY = Math.round(y * devicePixelRatio);
+        const tileHeightPx = bitmap.height;
+        // If this is the last partial tile and overlaps, trim from top
+        const remainingCssPx = effectiveHeight - y;
+        const remainingDevicePx = Math.round(remainingCssPx * devicePixelRatio);
+        const srcY = tileHeightPx - remainingDevicePx;
+
+        if (srcY > 0 && remainingDevicePx < tileHeightPx) {
+          // Partial final tile
+          ctx!.drawImage(
+            bitmap,
+            0, srcY, bitmap.width, remainingDevicePx,
+            0, destY, bitmap.width, remainingDevicePx,
+          );
+        } else {
+          ctx!.drawImage(bitmap, 0, destY);
+        }
+        bitmap.close();
       }
-      bitmap.close();
 
       y += innerHeight;
     }
@@ -123,5 +141,10 @@ export async function captureFullPage(tabId: number, windowId: number): Promise<
     await execInTabWithArg(tabId, scrollToY, 0).catch(() => {});
   }
 
-  return await canvas.convertToBlob({ type: "image/png" });
+  if (behavior === "separate") {
+    return tiles;
+  }
+  
+  const combinedBlob = await canvas.convertToBlob({ type: "image/png" });
+  return [combinedBlob];
 }

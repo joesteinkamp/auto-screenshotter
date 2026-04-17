@@ -1,14 +1,68 @@
 /**
- * MV3 service worker entry point. Routes messages from the popup.
+ * MV3 service worker entry point.
+ *
+ * Two inbound paths:
+ *   - Side panel messages (chrome.runtime.onMessage) — mcp/* and crawl/* methods.
+ *   - MCP tool calls from the relay (chrome WebSocket) — routed through mcp-bridge.
  */
 
-import type { BackgroundMessage, BackgroundResponse } from "../types";
-import { cancelCrawl, getCrawlState, startCrawl } from "./crawler";
+import type {
+  BackgroundMessage,
+  BackgroundResponse,
+  CrawlOptions,
+  JobContext,
+} from "../types";
+import {
+  cancelCrawl,
+  getCrawlState,
+  isCrawlRunning,
+  startCrawl,
+} from "./crawler";
 import { downloadZip } from "./exporter";
+import { createJob, ensureRehydrated, listJobs } from "./job-manager";
+import { handleRelayMessage } from "./mcp-bridge";
+import {
+  getConnectionInfo,
+  initRelay,
+  onRelayCommand,
+  setRelayEnabled,
+  setRelayUrlOverride,
+} from "./relay-client";
 
-chrome.runtime.onInstalled.addListener(() => {
+// ---- Side panel behavior: toolbar click opens the panel ----
+
+chrome.runtime.onInstalled.addListener(async () => {
   console.log("[auto-screenshotter] installed");
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  } catch (err) {
+    console.warn("setPanelBehavior failed", err);
+  }
+  await ensureRehydrated();
+  await initRelay();
 });
+
+chrome.runtime.onStartup.addListener(async () => {
+  try {
+    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+  } catch {
+    /* */
+  }
+  await ensureRehydrated();
+  await initRelay();
+});
+
+// Also attempt on module load (SW cold start without onStartup firing).
+ensureRehydrated().catch(() => undefined);
+initRelay().catch(() => undefined);
+
+onRelayCommand((cmd) => {
+  handleRelayMessage(cmd).catch((err) => {
+    console.warn("[auto-screenshotter] relay command failed", err);
+  });
+});
+
+// ---- Panel message router ----
 
 chrome.runtime.onMessage.addListener(
   (message: unknown, _sender, sendResponse: (resp: BackgroundResponse) => void) => {
@@ -24,18 +78,14 @@ chrome.runtime.onMessage.addListener(
         error: err instanceof Error ? err.message : String(err),
       });
     });
-    return true; // async response
+    return true;
   },
 );
 
 async function handleMessage(msg: BackgroundMessage): Promise<BackgroundResponse> {
   switch (msg.type) {
     case "crawl/start":
-      // Fire and forget — progress comes via broadcasts
-      startCrawl(msg.options).catch((err) => {
-        console.error("Crawl failed", err);
-      });
-      return { ok: true, state: getCrawlState() };
+      return startPanelCrawl(msg.options);
 
     case "crawl/cancel":
       await cancelCrawl();
@@ -52,5 +102,38 @@ async function handleMessage(msg: BackgroundMessage): Promise<BackgroundResponse
       await downloadZip(state.pages);
       return { ok: true, state };
     }
+
+    case "mcp/getStatus": {
+      const info = await getConnectionInfo();
+      return { ok: true, mcp: info };
+    }
+
+    case "mcp/setEnabled":
+      await setRelayEnabled(msg.enabled);
+      return { ok: true, mcp: await getConnectionInfo() };
+
+    case "mcp/setRelayOverride":
+      await setRelayUrlOverride(msg.url);
+      return { ok: true, mcp: await getConnectionInfo() };
+
+    case "jobs/list":
+      return { ok: true, jobs: listJobs() };
   }
+}
+
+async function startPanelCrawl(options: CrawlOptions): Promise<BackgroundResponse> {
+  if (isCrawlRunning()) {
+    return { ok: false, error: "A crawl is already running" };
+  }
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || tab.id == null) {
+    return { ok: false, error: "No active tab found" };
+  }
+  const job = createJob("panel");
+  const ctx: JobContext = { jobId: job.id, tabId: tab.id, ownsTab: false };
+  // Fire and forget — progress comes via broadcasts; crawler sets state synchronously.
+  startCrawl(options, ctx).catch((err) => {
+    console.error("Crawl failed", err);
+  });
+  return { ok: true, state: getCrawlState() };
 }

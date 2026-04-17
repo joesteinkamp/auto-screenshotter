@@ -1,47 +1,53 @@
 /**
  * Crawl orchestrator.
  *
- * Responsibilities:
- *   - Maintain the priority queue and visited set
- *   - Drive the dedicated crawl tab through each URL
- *   - Run pre-capture hygiene, take screenshot, extract links
- *   - Score discovered links and enqueue them
- *   - Optionally refine queue scores with LLM after the first page
- *   - Broadcast progress updates
+ * Two modes:
+ *   - startCrawl(options, ctx)          — seeded with options.startUrl, discovers links, scores, enqueues.
+ *   - startScreenshotBatch(urls, ctx)   — exact URL list, no discovery, no scoring.
+ *
+ * Both share capturePageAt() which does navigate → pre-capture → full-page
+ * screenshot → store blobs → optional vision-state capture → return a
+ * CapturedPage.
+ *
+ * ctx.jobId is threaded through IndexedDB keys (`${jobId}:${order}-${url}`)
+ * so concurrent jobs never collide and the LRU purge can drop whole jobs.
+ * ctx.ownsTab=true means this crawler instance is responsible for closing
+ * the tab on finish (MCP-triggered jobs run in a dedicated inactive tab).
  */
 
 import type {
   CapturedPage,
   CrawlOptions,
   CrawlState,
+  ExtractedLink,
+  JobContext,
   ScoredLink,
 } from "../types";
 import { PriorityQueue } from "../lib/queue";
 import { normalizeUrl, textHash } from "../lib/url";
-import { broadcastToPopup } from "../lib/messaging";
-import {
-  clearScreenshots,
-  getSettings,
-  putScreenshot,
-} from "../lib/storage";
+import { broadcastToPanel } from "../lib/messaging";
+import { getSettings, putScreenshot } from "../lib/storage";
 import { toScoredLink } from "../scoring/heuristics";
-import { mergeScores, refineWithLlm } from "../scoring/llm-refiner";
+import { analyzePageForInteractiveElements } from "../scoring/vision-analyzer";
 import { extractLinksFromPage } from "../content/link-extractor";
 import { preCapturePage } from "../content/pre-capture";
+import { clickBySelector, clickAtPoint } from "../content/interact-and-capture";
 import { captureFullPage } from "./screenshot";
+import { updateJob, finishJob } from "./job-manager";
 
 const SCORE_THRESHOLD = 0;
-const SETTLE_AFTER_LOAD_MS = 500;
+const SETTLE_AFTER_LOAD_MS = 2000;
+const INTERACTION_SETTLE_MS = 800;
 
 let state: CrawlState = {
   options: defaultOptions(),
   status: { state: "idle" },
   pages: [],
   startedAt: 0,
+  jobId: null,
 };
 let abortRequested = false;
-let activeTabId: number | null = null;
-let llmRefined = false;
+let running = false;
 
 function defaultOptions(): CrawlOptions {
   return {
@@ -51,6 +57,7 @@ function defaultOptions(): CrawlOptions {
     sameOriginOnly: true,
     useLlm: false,
     requestDelayMs: 1000,
+    scrollBehavior: "combine",
   };
 }
 
@@ -58,12 +65,26 @@ export function getCrawlState(): CrawlState {
   return state;
 }
 
+export function isCrawlRunning(): boolean {
+  return running;
+}
+
 export async function cancelCrawl(): Promise<void> {
   abortRequested = true;
 }
 
 function broadcast(): void {
-  broadcastToPopup({ type: "state/update", state });
+  broadcastToPanel({ type: "state/update", state });
+  if (state.jobId) {
+    const status = state.status;
+    const currentUrl =
+      status.state === "running" ? status.currentUrl : undefined;
+    updateJob(state.jobId, {
+      status,
+      pageCount: state.pages.length,
+      currentUrl,
+    });
+  }
 }
 
 async function navigateAndWait(tabId: number, url: string): Promise<void> {
@@ -91,16 +112,210 @@ async function execInTab<T>(tabId: number, func: () => T | Promise<T>): Promise<
   return result.result as T;
 }
 
-export async function startCrawl(options: CrawlOptions): Promise<void> {
-  // Reset state
+async function execInTabWithArg<T, A>(
+  tabId: number,
+  func: (arg: A) => T | Promise<T>,
+  arg: A,
+): Promise<T> {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func,
+    args: [arg],
+  });
+  return result.result as T;
+}
+
+async function captureViewportBlob(windowId: number): Promise<Blob> {
+  const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+    format: "png",
+    quality: 92,
+  });
+  const resp = await fetch(dataUrl);
+  return resp.blob();
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+interface CaptureResult {
+  /** CapturedPage to push onto state.pages, or null if skipped (dedup / hashed). */
+  page: CapturedPage | null;
+  /** Links discovered on the page (empty for screenshot-batch mode where caller doesn't want them). */
+  links: ExtractedLink[];
+  /** The hash of the page's visible text, for dedup. */
+  contentHash: string;
+}
+
+/**
+ * Navigate to url, pre-capture, take a full-page screenshot, optionally run
+ * vision state capture, store all blobs under `${jobId}:${order}-${url}[...]`.
+ * Returns the constructed CapturedPage plus links for callers that care.
+ *
+ * If `collectLinks` is false we skip the link-extractor injection entirely
+ * (screenshot_urls mode doesn't need it).
+ */
+async function capturePageAt(
+  tabId: number,
+  windowId: number,
+  url: string,
+  order: number,
+  score: number,
+  jobId: string,
+  options: CrawlOptions,
+  collectLinks: boolean,
+  seenHashes: Set<string>,
+): Promise<CaptureResult> {
+  await navigateAndWait(tabId, url);
+  await execInTab(tabId, preCapturePage).catch(() => null);
+
+  const blobs = await captureFullPage(tabId, windowId, options.scrollBehavior);
+
+  let extraction: {
+    url: string;
+    title: string;
+    textSample: string;
+    links: ExtractedLink[];
+  };
+
+  if (collectLinks) {
+    extraction = await execInTab(tabId, extractLinksFromPage);
+  } else {
+    const info = await execInTab(tabId, () => ({
+      url: document.URL,
+      title: document.title,
+      textSample: (document.body?.innerText ?? "").slice(0, 2000),
+    }));
+    extraction = { ...info, links: [] };
+  }
+
+  const hash = textHash(extraction.textSample);
+  if (extraction.textSample.length > 50) {
+    if (seenHashes.has(hash)) {
+      return { page: null, links: extraction.links, contentHash: hash };
+    }
+    seenHashes.add(hash);
+  }
+
+  const normalized = normalizeUrl(url);
+  const baseKey = `${jobId}:${order}-${normalized}`;
+  const blobKeys: string[] = [];
+
+  if (blobs.length === 1) {
+    await putScreenshot(baseKey, blobs[0]);
+    blobKeys.push(baseKey);
+  } else {
+    for (let i = 0; i < blobs.length; i++) {
+      const tileKey = `${baseKey}-tile${i}`;
+      await putScreenshot(tileKey, blobs[i]);
+      blobKeys.push(tileKey);
+    }
+  }
+
+  const page: CapturedPage = {
+    url: extraction.url || url,
+    title: extraction.title || url,
+    score,
+    capturedAt: Date.now(),
+    order,
+    blobKey: blobKeys[0] ?? baseKey,
+    blobKeys,
+    contentHash: hash,
+    thumbnailDataUrl:
+      blobs.length > 0 ? await blobToThumbnail(blobs[0]) : undefined,
+  };
+
+  // Vision-based dynamic state capture
+  if (options.useLlm) {
+    try {
+      const settings = await getSettings();
+      const providerCfg = settings.providers[settings.aiProvider];
+      if (providerCfg?.apiKey) {
+        await new Promise((r) => setTimeout(r, 300));
+        const viewportBlob = await captureViewportBlob(windowId);
+        const base64 = await blobToBase64(viewportBlob);
+
+        const elements = await analyzePageForInteractiveElements({
+          screenshotBase64: base64,
+          provider: settings.aiProvider,
+          apiKey: providerCfg.apiKey,
+          model: providerCfg.model || undefined,
+        });
+
+        if (elements.length > 0) {
+          for (let si = 0; si < elements.length; si++) {
+            if (abortRequested) break;
+            const el = elements[si];
+
+            let clicked = false;
+            try {
+              clicked = await execInTabWithArg(tabId, clickBySelector, el.selector);
+            } catch {
+              clicked = false;
+            }
+            if (!clicked) {
+              try {
+                clicked = await execInTabWithArg(tabId, clickAtPoint, { x: el.x, y: el.y });
+              } catch {
+                clicked = false;
+              }
+            }
+            if (!clicked) continue;
+
+            await new Promise((r) => setTimeout(r, INTERACTION_SETTLE_MS));
+            const stateBlob = await captureViewportBlob(windowId);
+            const stateKey = `${baseKey}-state${si}`;
+            await putScreenshot(stateKey, stateBlob);
+            page.blobKeys!.push(stateKey);
+
+            await navigateAndWait(tabId, url);
+            await execInTab(tabId, preCapturePage).catch(() => null);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[auto-screenshotter] Vision analysis failed, continuing", err);
+    }
+  }
+
+  return { page, links: extraction.links, contentHash: hash };
+}
+
+async function resolveTab(ctx: JobContext): Promise<{ tabId: number; windowId: number }> {
+  const tab = await chrome.tabs.get(ctx.tabId);
+  if (tab.windowId == null) throw new Error("Tab has no window");
+  return { tabId: ctx.tabId, windowId: tab.windowId };
+}
+
+async function cleanupTab(ctx: JobContext, originalUrl?: string): Promise<void> {
+  if (ctx.ownsTab) {
+    await chrome.tabs.remove(ctx.tabId).catch(() => undefined);
+  } else if (originalUrl) {
+    await chrome.tabs.update(ctx.tabId, { url: originalUrl }).catch(() => undefined);
+  }
+}
+
+/**
+ * Crawl starting from options.startUrl, discovering links. `ctx` identifies
+ * the job and the tab to drive.
+ */
+export async function startCrawl(options: CrawlOptions, ctx: JobContext): Promise<void> {
+  if (running) throw new Error("crawler busy");
+  running = true;
   abortRequested = false;
-  llmRefined = false;
-  await clearScreenshots();
+
   state = {
     options,
     status: { state: "running", currentUrl: options.startUrl, capturedCount: 0, queueSize: 1 },
     pages: [],
     startedAt: Date.now(),
+    jobId: ctx.jobId,
   };
   broadcast();
 
@@ -108,10 +323,9 @@ export async function startCrawl(options: CrawlOptions): Promise<void> {
   const visited = new Set<string>();
   const contentHashes = new Set<string>();
 
-  // Seed with start URL
   queue.push({
     url: options.startUrl,
-    score: 1000, // force first
+    score: 1000,
     depth: 0,
     sourceUrl: options.startUrl,
     anchorText: "start",
@@ -126,28 +340,23 @@ export async function startCrawl(options: CrawlOptions): Promise<void> {
     },
   });
 
-  // Create dedicated crawl tab
-  const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-  if (tab.id == null || tab.windowId == null) {
-    throw new Error("Failed to create crawl tab");
-  }
-  activeTabId = tab.id;
-  const tabId = tab.id;
-  const windowId = tab.windowId;
-
+  let originalUrl: string | undefined;
   try {
-    let order = 0;
+    const { tabId, windowId } = await resolveTab(ctx);
+    if (!ctx.ownsTab) {
+      const tab = await chrome.tabs.get(tabId);
+      originalUrl = tab.url ?? undefined;
+    }
 
+    let order = 0;
     while (queue.size > 0 && state.pages.length < options.maxPages) {
       if (abortRequested) break;
-
       const next = queue.pop();
       if (!next) break;
 
       const normalized = normalizeUrl(next.url);
       if (visited.has(normalized)) continue;
       visited.add(normalized);
-
       if (next.depth > options.maxDepth) continue;
 
       state.status = {
@@ -159,91 +368,49 @@ export async function startCrawl(options: CrawlOptions): Promise<void> {
       broadcast();
 
       try {
-        await navigateAndWait(tabId, next.url);
+        const result = await capturePageAt(
+          tabId,
+          windowId,
+          next.url,
+          order + 1,
+          next.score,
+          ctx.jobId,
+          options,
+          true,
+          contentHashes,
+        );
 
-        // Pre-capture hygiene
-        await execInTab(tabId, preCapturePage).catch(() => null);
+        if (result.page) {
+          order++;
+          state.pages.push(result.page);
 
-        // Capture
-        const blob = await captureFullPage(tabId, windowId);
-
-        // Extract links + page info
-        const extraction = await execInTab(tabId, extractLinksFromPage);
-
-        // Content dedup
-        const hash = textHash(extraction.textSample);
-        if (contentHashes.has(hash)) {
-          // Already captured functionally-identical page; skip storing
-          continue;
-        }
-        contentHashes.add(hash);
-
-        order++;
-        const blobKey = `${order}-${normalized}`;
-        await putScreenshot(blobKey, blob);
-
-        const page: CapturedPage = {
-          url: extraction.url || next.url,
-          title: extraction.title || next.url,
-          score: next.score,
-          capturedAt: Date.now(),
-          order,
-          blobKey,
-          contentHash: hash,
-          thumbnailDataUrl: await blobToThumbnail(blob),
-        };
-        state.pages.push(page);
-
-        // Score new links and enqueue
-        const scored: ScoredLink[] = [];
-        for (const link of extraction.links) {
-          const s = toScoredLink(link, {
-            sourceUrl: next.url,
-            depth: next.depth + 1,
-            sameOriginOnly: options.sameOriginOnly,
-            startUrl: options.startUrl,
-          });
-          if (s && s.score >= SCORE_THRESHOLD) scored.push(s);
-        }
-
-        // Filter out already-visited URLs before enqueueing
-        const fresh = scored.filter((s) => !visited.has(normalizeUrl(s.url)));
-
-        // LLM refinement — run once after homepage
-        if (options.useLlm && !llmRefined && state.pages.length === 1 && fresh.length > 0) {
-          llmRefined = true;
-          try {
-            const settings = await getSettings();
-            const providerCfg = settings.providers[settings.aiProvider];
-            if (providerCfg?.apiKey) {
-              const topForLlm = [...fresh].sort((a, b) => b.score - a.score).slice(0, 20);
-              const refined = await refineWithLlm({
-                siteUrl: options.startUrl,
-                homepageTitle: page.title,
-                links: topForLlm,
-                provider: settings.aiProvider,
-                apiKey: providerCfg.apiKey,
-                model: providerCfg.model || undefined,
-              });
-              const merged = mergeScores(fresh, refined);
-              for (const link of merged) queue.push(link);
-            } else {
-              for (const link of fresh) queue.push(link);
+          if (state.pages.length === 1) {
+            try {
+              options.startUrl = new URL(result.page.url).origin;
+            } catch {
+              /* retain */
             }
-          } catch (err) {
-            console.warn("LLM refiner failed, falling back to heuristics", err);
-            for (const link of fresh) queue.push(link);
           }
-        } else {
-          for (const link of fresh) queue.push(link);
-        }
 
-        broadcast();
+          const scored: ScoredLink[] = [];
+          for (const link of result.links) {
+            const s = toScoredLink(link, {
+              sourceUrl: next.url,
+              depth: next.depth + 1,
+              sameOriginOnly: options.sameOriginOnly,
+              startUrl: options.startUrl,
+            });
+            if (s && s.score >= SCORE_THRESHOLD) scored.push(s);
+          }
+          const fresh = scored.filter((s) => !visited.has(normalizeUrl(s.url)));
+          for (const link of fresh) queue.push(link);
+
+          broadcast();
+        }
       } catch (err) {
         console.warn(`Failed to capture ${next.url}`, err);
       }
 
-      // Politeness delay between pages
       if (options.requestDelayMs > 0) {
         await new Promise((r) => setTimeout(r, options.requestDelayMs));
       }
@@ -259,11 +426,105 @@ export async function startCrawl(options: CrawlOptions): Promise<void> {
       capturedCount: state.pages.length,
     };
   } finally {
-    if (activeTabId != null) {
-      chrome.tabs.remove(activeTabId).catch(() => {});
-      activeTabId = null;
-    }
+    await cleanupTab(ctx, originalUrl);
+    running = false;
     broadcast();
+    finishJob(ctx.jobId, state.status);
+  }
+}
+
+/**
+ * Screenshot exactly the given URLs. No link discovery, no scoring.
+ * All pages share the same job tab.
+ */
+export async function startScreenshotBatch(
+  urls: string[],
+  options: Partial<CrawlOptions>,
+  ctx: JobContext,
+): Promise<void> {
+  if (running) throw new Error("crawler busy");
+  if (urls.length === 0) throw new Error("no URLs supplied");
+  running = true;
+  abortRequested = false;
+
+  const merged: CrawlOptions = {
+    ...defaultOptions(),
+    ...options,
+    startUrl: urls[0],
+  };
+
+  state = {
+    options: merged,
+    status: { state: "running", currentUrl: urls[0], capturedCount: 0, queueSize: urls.length },
+    pages: [],
+    startedAt: Date.now(),
+    jobId: ctx.jobId,
+  };
+  broadcast();
+
+  const contentHashes = new Set<string>();
+  let originalUrl: string | undefined;
+
+  try {
+    const { tabId, windowId } = await resolveTab(ctx);
+    if (!ctx.ownsTab) {
+      const tab = await chrome.tabs.get(tabId);
+      originalUrl = tab.url ?? undefined;
+    }
+
+    let order = 0;
+    for (let i = 0; i < urls.length; i++) {
+      if (abortRequested) break;
+      const url = urls[i];
+
+      state.status = {
+        state: "running",
+        currentUrl: url,
+        capturedCount: state.pages.length,
+        queueSize: urls.length - i - 1,
+      };
+      broadcast();
+
+      try {
+        const result = await capturePageAt(
+          tabId,
+          windowId,
+          url,
+          order + 1,
+          100,
+          ctx.jobId,
+          merged,
+          false,
+          contentHashes,
+        );
+        if (result.page) {
+          order++;
+          state.pages.push(result.page);
+          broadcast();
+        }
+      } catch (err) {
+        console.warn(`Failed to capture ${url}`, err);
+      }
+
+      if (merged.requestDelayMs > 0 && i < urls.length - 1) {
+        await new Promise((r) => setTimeout(r, merged.requestDelayMs));
+      }
+    }
+
+    state.status = abortRequested
+      ? { state: "cancelled", capturedCount: state.pages.length }
+      : { state: "complete", capturedCount: state.pages.length };
+  } catch (err) {
+    state.status = {
+      state: "error",
+      message: err instanceof Error ? err.message : String(err),
+      capturedCount: state.pages.length,
+    };
+  } finally {
+    await cleanupTab(ctx, originalUrl);
+    running = false;
+    broadcast();
+    finishJob(ctx.jobId, state.status);
   }
 }
 

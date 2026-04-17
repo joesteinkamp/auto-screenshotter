@@ -1,0 +1,22 @@
+{
+  "name": "@auto-screenshotter/relay",
+  "version": "0.1.0",
+  "description": "Local MCP relay that bridges AI tool clients to the Auto Screenshotter Chrome extension.",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.3"
+  }
+}

@@ -10,16 +10,19 @@
     "scripting",
     "webNavigation",
     "downloads",
-    "offscreen"
+    "offscreen",
+    "sidePanel"
   ],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": ["<all_urls>", "http://localhost:3848/*", "ws://localhost:3848/*"],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
   },
   "action": {
-    "default_popup": "src/popup/index.html",
     "default_title": "Auto Screenshotter"
+  },
+  "side_panel": {
+    "default_path": "src/panel/index.html"
   },
   "icons": {
     "16": "public/icons/icon-16.png",

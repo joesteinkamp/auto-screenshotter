@@ -47,6 +47,54 @@ export async function clearScreenshots(): Promise<void> {
   await db.clear(SHOTS_STORE);
 }
 
+/** All screenshots whose key begins with `${jobId}:`. */
+export async function getJobScreenshots(
+  jobId: string,
+): Promise<Array<{ key: string; blob: Blob }>> {
+  const db = await getDb();
+  const prefix = `${jobId}:`;
+  const keys = (await db.getAllKeys(SHOTS_STORE)) as string[];
+  const matches = keys.filter((k) => k.startsWith(prefix));
+  const out: Array<{ key: string; blob: Blob }> = [];
+  for (const key of matches) {
+    const blob = (await db.get(SHOTS_STORE, key)) as Blob | undefined;
+    if (blob) out.push({ key, blob });
+  }
+  return out;
+}
+
+export async function deleteJobScreenshots(jobId: string): Promise<void> {
+  const db = await getDb();
+  const prefix = `${jobId}:`;
+  const keys = (await db.getAllKeys(SHOTS_STORE)) as string[];
+  const tx = db.transaction(SHOTS_STORE, "readwrite");
+  await Promise.all(
+    keys.filter((k) => k.startsWith(prefix)).map((k) => tx.store.delete(k)),
+  );
+  await tx.done;
+}
+
+/**
+ * Keep only the most recent `keep` jobs. Any screenshot keyed under an older
+ * jobId is deleted. Keys without a `:` prefix (legacy data) are untouched.
+ */
+export async function purgeOldJobs(keepJobIds: string[]): Promise<void> {
+  const keepSet = new Set(keepJobIds);
+  const db = await getDb();
+  const keys = (await db.getAllKeys(SHOTS_STORE)) as string[];
+  const tx = db.transaction(SHOTS_STORE, "readwrite");
+  await Promise.all(
+    keys
+      .filter((k) => {
+        const colon = k.indexOf(":");
+        if (colon < 0) return false;
+        return !keepSet.has(k.slice(0, colon));
+      })
+      .map((k) => tx.store.delete(k)),
+  );
+  await tx.done;
+}
+
 // ---- Settings via chrome.storage.local ----
 
 const SETTINGS_KEY = "settings";
@@ -63,6 +111,7 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   defaultMaxPages: 50,
   defaultMaxDepth: 4,
   defaultRequestDelayMs: 1000,
+  defaultScrollBehavior: "combine",
 };
 
 /**

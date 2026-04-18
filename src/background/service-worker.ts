@@ -11,12 +11,14 @@ import type {
   BackgroundResponse,
   CrawlOptions,
   JobContext,
+  ScrollBehavior,
 } from "../types";
 import {
   cancelCrawl,
   getCrawlState,
   isCrawlRunning,
   startCrawl,
+  startSinglePageCapture,
 } from "./crawler";
 import { downloadZip } from "./exporter";
 import { createJob, ensureRehydrated, listJobs } from "./job-manager";
@@ -87,6 +89,9 @@ async function handleMessage(msg: BackgroundMessage): Promise<BackgroundResponse
     case "crawl/start":
       return startPanelCrawl(msg.options);
 
+    case "crawl/captureCurrent":
+      return startPanelSingleCapture(msg.scrollBehavior);
+
     case "crawl/cancel":
       await cancelCrawl();
       return { ok: true, state: getCrawlState() };
@@ -119,6 +124,27 @@ async function handleMessage(msg: BackgroundMessage): Promise<BackgroundResponse
     case "jobs/list":
       return { ok: true, jobs: listJobs() };
   }
+}
+
+async function startPanelSingleCapture(
+  scrollBehavior: ScrollBehavior,
+): Promise<BackgroundResponse> {
+  if (isCrawlRunning()) {
+    return { ok: false, error: "A capture is already running" };
+  }
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || tab.id == null) {
+    return { ok: false, error: "No active tab found" };
+  }
+  if (!tab.url || !/^https?:\/\//.test(tab.url)) {
+    return { ok: false, error: "Active tab is not an http(s) page" };
+  }
+  const job = createJob("panel");
+  const ctx: JobContext = { jobId: job.id, tabId: tab.id, ownsTab: false };
+  startSinglePageCapture(scrollBehavior, ctx).catch((err) => {
+    console.error("Single capture failed", err);
+  });
+  return { ok: true, state: getCrawlState() };
 }
 
 async function startPanelCrawl(options: CrawlOptions): Promise<BackgroundResponse> {

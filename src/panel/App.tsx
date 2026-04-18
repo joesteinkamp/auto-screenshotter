@@ -52,6 +52,16 @@ export default function App() {
     else if (!resp.ok) alert(resp.error);
   };
 
+  const handleCaptureCurrent = async () => {
+    const behavior = settings?.defaultScrollBehavior ?? "combine";
+    const resp = await sendToBackground({
+      type: "crawl/captureCurrent",
+      scrollBehavior: behavior,
+    });
+    if (resp.ok && resp.state) setState(resp.state);
+    else if (!resp.ok) alert(resp.error);
+  };
+
   const handleCancel = async () => {
     const resp = await sendToBackground({ type: "crawl/cancel" });
     if (resp.ok && resp.state) setState(resp.state);
@@ -115,6 +125,7 @@ export default function App() {
               state={state}
               settings={settings}
               onStart={handleStart}
+              onCaptureCurrent={handleCaptureCurrent}
               onCancel={handleCancel}
               onDownload={handleDownload}
             />

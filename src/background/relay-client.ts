@@ -18,7 +18,7 @@ import type {
 } from "../types";
 import { broadcastToPanel } from "../lib/messaging";
 
-const DEFAULT_RELAY_URL = "ws://localhost:3848";
+const DEFAULT_RELAY_URL = "wss://auto-screenshotter-relay.designknowledgebase.com";
 const SYNC_USER_ID_KEY = "mcpUserId";
 const SYNC_ENABLED_KEY = "mcpEnabled";
 const SYNC_RELAY_OVERRIDE_KEY = "mcpRelayUrlOverride";
@@ -76,9 +76,11 @@ export async function getRelayEnabled(): Promise<boolean> {
 export async function setRelayEnabled(enabled: boolean): Promise<void> {
   await syncSet(SYNC_ENABLED_KEY, enabled);
   if (enabled) {
+    reconnectAttempt = 0;
     await initRelay();
   } else {
     stopRelay();
+    reconnectAttempt = 0;
     setStatus("disabled");
   }
 }
@@ -87,6 +89,7 @@ export async function setRelayUrlOverride(url: string): Promise<void> {
   await syncSet(SYNC_RELAY_OVERRIDE_KEY, url);
   if (await getRelayEnabled()) {
     stopRelay();
+    reconnectAttempt = 0;
     await initRelay();
   }
 }
@@ -153,7 +156,21 @@ export function stopRelay(): void {
     }
     socket = null;
   }
-  reconnectAttempt = 0;
+}
+
+function teardownSocket(): void {
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
+  }
+  if (socket) {
+    try {
+      socket.close();
+    } catch {
+      /* */
+    }
+    socket = null;
+  }
 }
 
 export async function initRelay(): Promise<void> {
@@ -166,7 +183,7 @@ export async function initRelay(): Promise<void> {
 }
 
 async function connect(): Promise<void> {
-  stopRelay();
+  teardownSocket();
   const userId = await getUserId();
   const relayUrl = await getRelayUrl();
   const url = `${relayUrl}/ws?id=${encodeURIComponent(userId)}`;
@@ -184,6 +201,7 @@ async function connect(): Promise<void> {
 
   ws.addEventListener("open", () => {
     reconnectAttempt = 0;
+    lastError = undefined;
     setStatus("connected");
     pingInterval = setInterval(() => {
       sendToRelay({ type: "pong" });
@@ -210,7 +228,7 @@ async function connect(): Promise<void> {
       clearInterval(pingInterval);
       pingInterval = null;
     }
-    setStatus("disconnected");
+    setStatus("disconnected", lastError);
     scheduleReconnect();
   });
 

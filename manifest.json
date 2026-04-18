@@ -13,7 +13,7 @@
     "offscreen",
     "sidePanel"
   ],
-  "host_permissions": ["<all_urls>", "http://localhost:3848/*", "ws://localhost:3848/*"],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background/service-worker.ts",
     "type": "module"

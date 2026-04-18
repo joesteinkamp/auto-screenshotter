@@ -36,7 +36,10 @@ import { captureFullPage } from "./screenshot";
 import { updateJob, finishJob } from "./job-manager";
 
 const SCORE_THRESHOLD = 0;
-const SETTLE_AFTER_LOAD_MS = 2000;
+/** Max time to wait for readyState/images after `status: complete`. */
+const QUIET_WAIT_MAX_MS = 6000;
+/** Small settle delay after the page reports quiet, for late animations. */
+const POST_QUIET_SETTLE_MS = 500;
 const INTERACTION_SETTLE_MS = 800;
 
 let state: CrawlState = {
@@ -101,7 +104,44 @@ async function navigateAndWait(tabId: number, url: string): Promise<void> {
     };
     chrome.tabs.onUpdated.addListener(listener);
   });
-  await new Promise((r) => setTimeout(r, SETTLE_AFTER_LOAD_MS));
+  await execInTabWithArg(tabId, waitForPageQuiet, QUIET_WAIT_MAX_MS).catch(() => null);
+  await new Promise((r) => setTimeout(r, POST_QUIET_SETTLE_MS));
+}
+
+/**
+ * Resolves when the page looks "quiet": readyState === "complete",
+ * all in-viewport images have loaded (or errored), and ~500ms have passed
+ * with no new image additions. Bails after `maxMs` regardless.
+ */
+function waitForPageQuiet(maxMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + maxMs;
+
+    const imagesReady = (): boolean => {
+      const imgs = Array.from(document.images);
+      for (const img of imgs) {
+        const rect = img.getBoundingClientRect();
+        const onscreen =
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight &&
+          rect.right > 0 &&
+          rect.left < window.innerWidth;
+        if (onscreen && !img.complete) return false;
+      }
+      return true;
+    };
+
+    const tick = () => {
+      if (Date.now() >= deadline) return resolve();
+      if (document.readyState === "complete" && imagesReady()) {
+        setTimeout(resolve, 300);
+        return;
+      }
+      setTimeout(tick, 150);
+    };
+
+    tick();
+  });
 }
 
 async function execInTab<T>(tabId: number, func: () => T | Promise<T>): Promise<T> {

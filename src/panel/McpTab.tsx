@@ -60,7 +60,7 @@ export default function McpTab({ info, onToggle, onRelayOverride }: Props) {
           <input
             type="text"
             value={relayDraft}
-            placeholder="ws://localhost:3848"
+            placeholder="wss://auto-screenshotter-relay.designknowledgebase.com"
             onChange={(e) => setRelayDraft(e.target.value)}
           />
           <button
@@ -88,7 +88,7 @@ export default function McpTab({ info, onToggle, onRelayOverride }: Props) {
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-        Default <code>ws://localhost:3848</code>. Change only if you run the relay on a different port.
+        Default <code>wss://auto-screenshotter-relay.designknowledgebase.com</code>. Change only if you run the relay on a different host or port.
       </div>
 
       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 16, lineHeight: 1.5 }}>

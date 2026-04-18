@@ -232,9 +232,13 @@ async function runCaptureJob(
 
   let tabId: number;
   try {
-    const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-    if (tab.id == null) throw new Error("chrome.tabs.create returned no id");
-    tabId = tab.id;
+    const win = await chrome.windows.create({
+      url: "about:blank",
+      focused: false,
+    });
+    const t = win?.tabs?.[0];
+    if (t?.id == null) throw new Error("chrome.windows.create returned no tab");
+    tabId = t.id;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     updateJob(job.id, {

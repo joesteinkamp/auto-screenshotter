@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CrawlOptions, ExtensionSettings, ScrollBehavior } from "../types";
+import { ChevronRightIcon } from "./Icons";
 
 interface Props {
   defaults: ExtensionSettings | null;
@@ -99,33 +100,12 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
       <div style={{ margin: "16px 0 8px" }}>
         <button
           type="button"
+          className={`disclosure ${showAdvanced ? "open" : ""}`}
           onClick={() => setShowAdvanced(!showAdvanced)}
-          style={{
-            background: "none",
-            border: "none",
-            padding: 0,
-            color: "var(--muted)",
-            cursor: "pointer",
-            fontSize: "12px",
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
+          aria-expanded={showAdvanced}
         >
-          <svg
-            style={{
-              width: 14,
-              height: 14,
-              transform: showAdvanced ? "rotate(90deg)" : "rotate(0)",
-              transition: "transform 0.15s ease",
-            }}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          Advanced Options
+          <ChevronRightIcon className="chev" />
+          Advanced options
         </button>
       </div>
 
@@ -146,41 +126,20 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
               />
             </div>
             <div>
-              <label>Scroll Behavior</label>
-              <div
-                style={{
-                  display: "flex",
-                  background: "var(--panel)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "5px",
-                  overflow: "hidden",
-                  height: "31px",
-                }}
-              >
+              <label>Scroll behavior</label>
+              <div className="segmented" role="group" aria-label="Scroll behavior">
                 {[
                   { value: "combine", label: "Combine" },
                   { value: "separate", label: "Separate" },
-                  { value: "none", label: "Don't Scroll" },
+                  { value: "none", label: "None" },
                 ].map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
                     disabled={disabled}
+                    className={scrollBehavior === opt.value ? "on" : ""}
+                    aria-pressed={scrollBehavior === opt.value}
                     onClick={() => setScrollBehavior(opt.value as ScrollBehavior)}
-                    style={{
-                      flex: 1,
-                      border: "none",
-                      background: scrollBehavior === opt.value ? "var(--accent)" : "transparent",
-                      color: scrollBehavior === opt.value ? "#fff" : "var(--text)",
-                      padding: "0 2px",
-                      fontSize: "10px",
-                      borderRadius: 0,
-                      cursor: "pointer",
-                      textAlign: "center",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
                   >
                     {opt.label}
                   </button>

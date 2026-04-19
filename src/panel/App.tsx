@@ -12,7 +12,7 @@ import CaptureTab from "./CaptureTab";
 import GalleryTab from "./GalleryTab";
 import McpTab from "./McpTab";
 import SettingsPanel from "./SettingsPanel";
-import { ArrowLeftIcon, GearIcon } from "./Icons";
+import { ArrowLeftIcon, GearIcon, LogoMark } from "./Icons";
 
 type Tab = "capture" | "gallery" | "mcp";
 type View = "main" | "settings";
@@ -75,11 +75,17 @@ export default function App() {
   return (
     <div>
       <header>
-        <h1>Auto Screenshotter</h1>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            <LogoMark />
+          </span>
+          <h1>Auto Screenshotter</h1>
+        </div>
         <button
           className="icon-button"
           onClick={() => setView(view === "main" ? "settings" : "main")}
           title="Settings"
+          aria-label="Settings"
         >
           <GearIcon />
         </button>

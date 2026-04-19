@@ -18,11 +18,14 @@ export default function ProgressView({ state, onCancel, onDownload }: Props) {
   return (
     <div className="section">
       <div className="progress">
-        <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <StatusBadge state={status.state} />
-          <span style={{ marginLeft: 8 }}>
-            {totalScreenshots} captured
-            {isRunning && status.state === "running" && ` · ${status.queueSize} in queue`}
+          <span style={{ color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+            <strong style={{ color: "var(--text)", fontWeight: 600 }}>{totalScreenshots}</strong>{" "}
+            captured
+            {isRunning && status.state === "running" && (
+              <span style={{ color: "var(--muted)" }}> · {status.queueSize} in queue</span>
+            )}
           </span>
         </div>
         {isRunning && status.state === "running" && (

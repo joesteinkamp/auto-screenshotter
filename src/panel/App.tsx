@@ -67,11 +67,6 @@ export default function App() {
     if (resp.ok && resp.mcp) setMcp(resp.mcp);
   };
 
-  const handleRelayOverride = async (url: string) => {
-    const resp = await sendToBackground({ type: "mcp/setRelayOverride", url });
-    if (resp.ok && resp.mcp) setMcp(resp.mcp);
-  };
-
   return (
     <div>
       <header>
@@ -128,13 +123,7 @@ export default function App() {
             />
           )}
 
-          {tab === "mcp" && (
-            <McpTab
-              info={mcp}
-              onToggle={handleMcpToggle}
-              onRelayOverride={handleRelayOverride}
-            />
-          )}
+          {tab === "mcp" && <McpTab info={mcp} onToggle={handleMcpToggle} />}
         </>
       )}
     </div>

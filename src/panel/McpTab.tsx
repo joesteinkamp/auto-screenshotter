@@ -5,7 +5,6 @@ import { CheckIcon, CopyIcon } from "./Icons";
 interface Props {
   info: MCPConnectionInfo | null;
   onToggle: (enabled: boolean) => void;
-  onRelayOverride: (url: string) => void;
 }
 
 const STATUS_LABEL: Record<MCPStatus, string> = {
@@ -15,10 +14,7 @@ const STATUS_LABEL: Record<MCPStatus, string> = {
   disabled: "Disabled",
 };
 
-export default function McpTab({ info, onToggle, onRelayOverride }: Props) {
-  const [relayDraft, setRelayDraft] = useState("");
-  const [editingRelay, setEditingRelay] = useState(false);
-
+export default function McpTab({ info, onToggle }: Props) {
   if (!info) {
     return <div className="section empty-state">Loading MCP status…</div>;
   }
@@ -54,46 +50,20 @@ export default function McpTab({ info, onToggle, onRelayOverride }: Props) {
         Point MCP-speaking clients (Cursor, claude.ai custom connectors) at this URL.
       </div>
 
-      <label style={{ marginTop: 14 }}>Relay URL</label>
-      {editingRelay ? (
-        <div className="row" style={{ gap: 6 }}>
-          <input
-            type="text"
-            value={relayDraft}
-            placeholder="wss://auto-screenshotter-relay.designknowledgebase.com"
-            onChange={(e) => setRelayDraft(e.target.value)}
-          />
-          <button
-            className="primary"
-            onClick={() => {
-              onRelayOverride(relayDraft.trim());
-              setEditingRelay(false);
-            }}
-          >
-            Save
-          </button>
-          <button onClick={() => setEditingRelay(false)}>Cancel</button>
-        </div>
-      ) : (
-        <div className="row" style={{ gap: 6 }}>
-          <code style={{ flex: 1, fontSize: 11, color: "var(--muted)" }}>{info.relayUrl}</code>
-          <button
-            onClick={() => {
-              setRelayDraft(info.relayUrl);
-              setEditingRelay(true);
-            }}
-          >
-            Change
-          </button>
-        </div>
-      )}
-      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-        Default <code>wss://auto-screenshotter-relay.designknowledgebase.com</code>. Change only if you run the relay on a different host or port.
+      <label style={{ marginTop: 14 }}>Claude Code</label>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}>
+        Run this command in your terminal to register the connector:
+      </div>
+      <div style={{ marginTop: 6 }}>
+        <code style={{ display: "block", fontSize: 11, wordBreak: "break-all" }}>
+          claude mcp add --transport http auto-screenshotter {info.endpointUrl}
+        </code>
       </div>
 
-      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 16, lineHeight: 1.5 }}>
-        Start the relay once with <code>cd relay &amp;&amp; npm install &amp;&amp; npm run dev</code>,
-        then enable MCP here. Your zips stay local — the relay is just a protocol bridge.
+      <label style={{ marginTop: 14 }}>Claude Desktop</label>
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, lineHeight: 1.5 }}>
+        Open <code>Settings → Connectors → Add custom connector</code> and paste the
+        Endpoint URL above.
       </div>
     </div>
   );

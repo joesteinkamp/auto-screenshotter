@@ -21,7 +21,6 @@ import { broadcastToPanel } from "../lib/messaging";
 const DEFAULT_RELAY_URL = "wss://auto-screenshotter-relay.designknowledgebase.com";
 const SYNC_USER_ID_KEY = "mcpUserId";
 const SYNC_ENABLED_KEY = "mcpEnabled";
-const SYNC_RELAY_OVERRIDE_KEY = "mcpRelayUrlOverride";
 
 const PING_INTERVAL_MS = 30_000;
 const BACKOFF_BASE_MS = 1000;
@@ -63,8 +62,6 @@ export async function getUserId(): Promise<string> {
 }
 
 export async function getRelayUrl(): Promise<string> {
-  const override = await syncGet<string>(SYNC_RELAY_OVERRIDE_KEY);
-  if (override && typeof override === "string" && override.length > 0) return override;
   return DEFAULT_RELAY_URL;
 }
 
@@ -82,15 +79,6 @@ export async function setRelayEnabled(enabled: boolean): Promise<void> {
     stopRelay();
     reconnectAttempt = 0;
     setStatus("disabled");
-  }
-}
-
-export async function setRelayUrlOverride(url: string): Promise<void> {
-  await syncSet(SYNC_RELAY_OVERRIDE_KEY, url);
-  if (await getRelayEnabled()) {
-    stopRelay();
-    reconnectAttempt = 0;
-    await initRelay();
   }
 }
 

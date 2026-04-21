@@ -191,7 +191,6 @@ export type BackgroundMessage =
   | { type: "crawl/download" }
   | { type: "mcp/getStatus" }
   | { type: "mcp/setEnabled"; enabled: boolean }
-  | { type: "mcp/setRelayOverride"; url: string }
   | { type: "jobs/list" };
 
 export type BackgroundResponse =

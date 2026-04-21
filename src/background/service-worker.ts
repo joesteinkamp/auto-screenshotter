@@ -26,7 +26,6 @@ import {
   initRelay,
   onRelayCommand,
   setRelayEnabled,
-  setRelayUrlOverride,
 } from "./relay-client";
 
 // ---- Side panel behavior: toolbar click opens the panel ----
@@ -110,10 +109,6 @@ async function handleMessage(msg: BackgroundMessage): Promise<BackgroundResponse
 
     case "mcp/setEnabled":
       await setRelayEnabled(msg.enabled);
-      return { ok: true, mcp: await getConnectionInfo() };
-
-    case "mcp/setRelayOverride":
-      await setRelayUrlOverride(msg.url);
       return { ok: true, mcp: await getConnectionInfo() };
 
     case "jobs/list":

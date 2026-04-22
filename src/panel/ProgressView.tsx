@@ -45,7 +45,7 @@ export default function ProgressView({ state, onCancel, onDownload }: Props) {
                 {page.thumbnailDataUrl ? (
                   <img src={page.thumbnailDataUrl} alt="" />
                 ) : (
-                  <div style={{ width: 48, height: 32, background: "#000", borderRadius: 3 }} />
+                  <div style={{ width: 48, height: 32, background: "var(--thumb-placeholder)", borderRadius: 3 }} />
                 )}
                 <div className="meta">
                   <div className="title">{page.title || page.url}</div>

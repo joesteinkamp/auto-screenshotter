@@ -186,6 +186,7 @@ export type RelayOutbound =
 // Message types for chrome.runtime messaging
 export type BackgroundMessage =
   | { type: "crawl/start"; options: CrawlOptions }
+  | { type: "crawl/captureCurrent"; scrollBehavior: ScrollBehavior }
   | { type: "crawl/cancel" }
   | { type: "crawl/getState" }
   | { type: "crawl/download" }

@@ -22,6 +22,7 @@ import type {
   ExtractedLink,
   JobContext,
   ScoredLink,
+  ScrollBehavior,
 } from "../types";
 import { PriorityQueue } from "../lib/queue";
 import { normalizeUrl, textHash } from "../lib/url";
@@ -562,6 +563,93 @@ export async function startScreenshotBatch(
     };
   } finally {
     await cleanupTab(ctx, originalUrl);
+    running = false;
+    broadcast();
+    finishJob(ctx.jobId, state.status);
+  }
+}
+
+/**
+ * Capture a single screenshot of the page currently loaded in ctx.tabId.
+ * No navigation, no link extraction, no vision analysis — just the same
+ * full-page capture pipeline the crawler uses, so manually-grabbed shots
+ * look identical to crawled ones.
+ */
+export async function startSinglePageCapture(
+  scrollBehavior: ScrollBehavior,
+  ctx: JobContext,
+): Promise<void> {
+  if (running) throw new Error("crawler busy");
+  running = true;
+  abortRequested = false;
+
+  const tab = await chrome.tabs.get(ctx.tabId);
+  const tabUrl = tab.url ?? "";
+
+  const merged: CrawlOptions = {
+    ...defaultOptions(),
+    startUrl: tabUrl,
+    scrollBehavior,
+  };
+
+  state = {
+    options: merged,
+    status: { state: "running", currentUrl: tabUrl, capturedCount: 0, queueSize: 1 },
+    pages: [],
+    startedAt: Date.now(),
+    jobId: ctx.jobId,
+  };
+  broadcast();
+
+  try {
+    if (tab.windowId == null) throw new Error("Tab has no window");
+    const windowId = tab.windowId;
+
+    await execInTab(ctx.tabId, preCapturePage).catch(() => null);
+    const blobs = await captureFullPage(ctx.tabId, windowId, scrollBehavior);
+
+    const info = await execInTab(ctx.tabId, () => ({
+      url: document.URL,
+      title: document.title,
+    }));
+
+    const normalized = normalizeUrl(info.url || tabUrl);
+    const baseKey = `${ctx.jobId}:1-${normalized}`;
+    const blobKeys: string[] = [];
+
+    if (blobs.length === 1) {
+      await putScreenshot(baseKey, blobs[0]);
+      blobKeys.push(baseKey);
+    } else {
+      for (let i = 0; i < blobs.length; i++) {
+        const tileKey = `${baseKey}-tile${i}`;
+        await putScreenshot(tileKey, blobs[i]);
+        blobKeys.push(tileKey);
+      }
+    }
+
+    const page: CapturedPage = {
+      url: info.url || tabUrl,
+      title: info.title || tabUrl,
+      score: 1000,
+      capturedAt: Date.now(),
+      order: 1,
+      blobKey: blobKeys[0] ?? baseKey,
+      blobKeys,
+      contentHash: "",
+      thumbnailDataUrl:
+        blobs.length > 0 ? await blobToThumbnail(blobs[0]) : undefined,
+    };
+    state.pages.push(page);
+
+    state.status = { state: "complete", capturedCount: 1 };
+  } catch (err) {
+    state.status = {
+      state: "error",
+      message: err instanceof Error ? err.message : String(err),
+      capturedCount: state.pages.length,
+    };
+  } finally {
     running = false;
     broadcast();
     finishJob(ctx.jobId, state.status);

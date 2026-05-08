@@ -39,7 +39,10 @@ export interface ScoredLink {
   context: LinkContext;
 }
 
-/** An interactive element identified by vision AI on a page screenshot. */
+/**
+ * An interactive element on a page — identified by either DOM heuristics
+ * or vision AI — that may reveal new visual state when hovered or clicked.
+ */
 export interface InteractiveElement {
   /** CSS selector to locate the element in the DOM. */
   selector: string;
@@ -49,6 +52,10 @@ export interface InteractiveElement {
   x: number;
   /** Viewport Y coordinate (CSS px) of the element center. */
   y: number;
+  /** Where this candidate came from. Optional for back-compat. */
+  source?: "heuristic" | "llm";
+  /** Heuristic score (higher = more confident). Optional. */
+  confidence?: number;
 }
 
 export interface CapturedPage {

@@ -34,6 +34,7 @@ import { preCapturePage } from "../content/pre-capture";
 import { clickBySelector, clickAtPoint } from "../content/interact-and-capture";
 import { captureFullPage } from "./screenshot";
 import { updateJob, finishJob } from "./job-manager";
+import { createFigmaSession, sendPageToFigma, type FigmaSession } from "./figma-bridge";
 
 const SCORE_THRESHOLD = 0;
 /** Max time to wait for readyState/images after `status: complete`. */
@@ -51,6 +52,7 @@ let state: CrawlState = {
 };
 let abortRequested = false;
 let running = false;
+let figmaSession: FigmaSession | undefined;
 
 function defaultOptions(): CrawlOptions {
   return {
@@ -271,6 +273,18 @@ async function capturePageAt(
       blobs.length > 0 ? await blobToThumbnail(blobs[0]) : undefined,
   };
 
+  if (figmaSession) {
+    try {
+      const figmaResult = await sendPageToFigma(figmaSession, { tabId, windowId });
+      page.figma = figmaResult;
+      if (figmaResult.ok && figmaResult.fileUrl && !state.figmaFileUrl) {
+        state.figmaFileUrl = figmaResult.fileUrl;
+      }
+    } catch (err) {
+      page.figma = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   // Vision-based dynamic state capture
   if (options.useLlm) {
     try {
@@ -350,12 +364,16 @@ export async function startCrawl(options: CrawlOptions, ctx: JobContext): Promis
   running = true;
   abortRequested = false;
 
+  const settings = await getSettings();
+  figmaSession = createFigmaSession(settings);
+
   state = {
     options,
     status: { state: "running", currentUrl: options.startUrl, capturedCount: 0, queueSize: 1 },
     pages: [],
     startedAt: Date.now(),
     jobId: ctx.jobId,
+    figmaFileUrl: figmaSession?.fileUrl,
   };
   broadcast();
 
@@ -468,6 +486,7 @@ export async function startCrawl(options: CrawlOptions, ctx: JobContext): Promis
   } finally {
     await cleanupTab(ctx, originalUrl);
     running = false;
+    figmaSession = undefined;
     broadcast();
     finishJob(ctx.jobId, state.status);
   }
@@ -493,12 +512,16 @@ export async function startScreenshotBatch(
     startUrl: urls[0],
   };
 
+  const settings = await getSettings();
+  figmaSession = createFigmaSession(settings);
+
   state = {
     options: merged,
     status: { state: "running", currentUrl: urls[0], capturedCount: 0, queueSize: urls.length },
     pages: [],
     startedAt: Date.now(),
     jobId: ctx.jobId,
+    figmaFileUrl: figmaSession?.fileUrl,
   };
   broadcast();
 
@@ -563,6 +586,7 @@ export async function startScreenshotBatch(
   } finally {
     await cleanupTab(ctx, originalUrl);
     running = false;
+    figmaSession = undefined;
     broadcast();
     finishJob(ctx.jobId, state.status);
   }

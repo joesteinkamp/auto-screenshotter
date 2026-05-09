@@ -33,6 +33,18 @@ export default function ProgressView({ state, onCancel, onDownload }: Props) {
             {status.message}
           </div>
         )}
+        {state.figmaFileUrl && (
+          <div className="current" style={{ marginTop: 4 }}>
+            <a
+              href={state.figmaFileUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "var(--accent)" }}
+            >
+              Open in Figma
+            </a>
+          </div>
+        )}
       </div>
 
       {pages.length > 0 && (
@@ -50,6 +62,18 @@ export default function ProgressView({ state, onCancel, onDownload }: Props) {
                 <div className="meta">
                   <div className="title">{page.title || page.url}</div>
                   <div className="url">{page.url}</div>
+                  {page.figma && (
+                    <div
+                      className="url"
+                      style={{
+                        color: page.figma.ok ? "var(--accent)" : "var(--danger)",
+                      }}
+                    >
+                      {page.figma.ok
+                        ? "→ Figma ✓"
+                        : `→ Figma ✗ ${page.figma.error ?? "failed"}`}
+                    </div>
+                  )}
                 </div>
                 <div className="score">{page.score}</div>
               </div>

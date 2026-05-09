@@ -51,6 +51,12 @@ export interface InteractiveElement {
   y: number;
 }
 
+export interface CapturedPageFigmaResult {
+  ok: boolean;
+  error?: string;
+  fileUrl?: string;
+}
+
 export interface CapturedPage {
   url: string;
   title: string;
@@ -64,6 +70,8 @@ export interface CapturedPage {
   /** Hash of page text for content dedup */
   contentHash: string;
   thumbnailDataUrl?: string;
+  /** Outcome of the optional "send to Figma" step. */
+  figma?: CapturedPageFigmaResult;
 }
 
 export type CrawlStatus =
@@ -80,6 +88,12 @@ export interface CrawlState {
   startedAt: number;
   /** Non-null when the current crawl was started from an MCP tool call. */
   jobId: string | null;
+  /**
+   * Figma file URL the crawl is targeting. Set when figma mode is enabled
+   * and either the user configured a default file URL or the first capture
+   * created/returned a file URL we're now chaining into.
+   */
+  figmaFileUrl?: string;
 }
 
 // ---- Jobs (MCP-triggered or panel-triggered) ----
@@ -214,6 +228,28 @@ export interface ProviderSettings {
   model: string;
 }
 
+export type FigmaCaptureType = "standard" | "designSystem";
+
+export interface FigmaModeSettings {
+  /** Toggle the whole feature. When false the crawler skips the Figma bridge entirely. */
+  enabled: boolean;
+  /** ID of the installed web-to-figma extension to send messages to. */
+  extensionId: string;
+  /** Which web-to-figma flow to use. */
+  defaultCaptureType: FigmaCaptureType;
+  /**
+   * Optional Figma file URL. When set, ALL captures (including the first)
+   * are routed into this file. Maps to web-to-figma's `fileUrl` field.
+   */
+  defaultFileUrl: string;
+  /**
+   * When true (default), the file URL returned by the first successful capture
+   * is reused as `fileUrl` for every subsequent page in the same crawl, so
+   * one crawl produces one Figma file.
+   */
+  chainCaptures: boolean;
+}
+
 export interface ExtensionSettings {
   /** Which provider to call when "Capture menus & other dynamic page states" is enabled. */
   aiProvider: AiProvider;
@@ -223,6 +259,8 @@ export interface ExtensionSettings {
   defaultMaxDepth: number;
   defaultRequestDelayMs: number;
   defaultScrollBehavior: ScrollBehavior;
+  /** Optional "send each captured page to Figma via web-to-figma" flow. */
+  figmaMode: FigmaModeSettings;
   /**
    * @deprecated Use `providers.anthropic.apiKey` instead. Kept for one-shot
    * migration from older installs.

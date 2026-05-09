@@ -112,6 +112,13 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   defaultMaxDepth: 4,
   defaultRequestDelayMs: 1000,
   defaultScrollBehavior: "combine",
+  figmaMode: {
+    enabled: false,
+    extensionId: "",
+    defaultCaptureType: "standard",
+    defaultFileUrl: "",
+    chainCaptures: true,
+  },
 };
 
 /**
@@ -127,6 +134,7 @@ function normalizeSettings(raw: Partial<ExtensionSettings> | undefined): Extensi
       openai: { ...DEFAULT_SETTINGS.providers.openai, ...(raw?.providers?.openai ?? {}) },
       gemini: { ...DEFAULT_SETTINGS.providers.gemini, ...(raw?.providers?.gemini ?? {}) },
     },
+    figmaMode: { ...DEFAULT_SETTINGS.figmaMode, ...(raw?.figmaMode ?? {}) },
   };
 
   // Legacy migration: if an old install had `anthropicApiKey` at the root
@@ -152,6 +160,10 @@ export async function saveSettings(settings: Partial<ExtensionSettings>): Promis
     providers: {
       ...current.providers,
       ...(settings.providers ?? {}),
+    },
+    figmaMode: {
+      ...current.figmaMode,
+      ...(settings.figmaMode ?? {}),
     },
   };
   await chrome.storage.local.set({ [SETTINGS_KEY]: next });

@@ -12,6 +12,8 @@ export interface CrawlOptions {
   useLlm: boolean;
   requestDelayMs: number;
   scrollBehavior: ScrollBehavior;
+  /** Hover/click probes to capture per page. Defaults to 5 when omitted. */
+  maxInteractionsPerPage?: number;
 }
 
 export interface LinkContext {
@@ -266,6 +268,8 @@ export interface ExtensionSettings {
   defaultMaxDepth: number;
   defaultRequestDelayMs: number;
   defaultScrollBehavior: ScrollBehavior;
+  /** Cap on hover/click probes captured per page (3-12). */
+  defaultMaxInteractionsPerPage: number;
   /** Optional "send each captured page to Figma via web-to-figma" flow. */
   figmaMode: FigmaModeSettings;
   /**

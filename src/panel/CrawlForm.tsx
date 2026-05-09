@@ -15,6 +15,7 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
   const [useLlm, setUseLlm] = useState(false);
   const [requestDelay, setRequestDelay] = useState(1000);
   const [scrollBehavior, setScrollBehavior] = useState<ScrollBehavior>("combine");
+  const [maxInteractions, setMaxInteractions] = useState(5);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
@@ -23,6 +24,7 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
       setMaxDepth(defaults.defaultMaxDepth);
       setRequestDelay(defaults.defaultRequestDelayMs);
       setScrollBehavior(defaults.defaultScrollBehavior);
+      setMaxInteractions(defaults.defaultMaxInteractionsPerPage);
     }
   }, [defaults]);
 
@@ -51,6 +53,7 @@ export default function CrawlForm({ defaults, disabled, onStart }: Props) {
       useLlm: useLlm && llmAvailable,
       requestDelayMs: requestDelay,
       scrollBehavior,
+      maxInteractionsPerPage: maxInteractions,
     });
   };
 

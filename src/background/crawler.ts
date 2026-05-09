@@ -20,6 +20,7 @@ import type {
   CrawlOptions,
   CrawlState,
   ExtractedLink,
+  InteractiveElement,
   JobContext,
   ScoredLink,
 } from "../types";
@@ -28,10 +29,15 @@ import { normalizeUrl, textHash } from "../lib/url";
 import { broadcastToPanel } from "../lib/messaging";
 import { getSettings, putScreenshot } from "../lib/storage";
 import { toScoredLink } from "../scoring/heuristics";
-import { analyzePageForInteractiveElements } from "../scoring/vision-analyzer";
+import {
+  analyzePageForInteractiveElements,
+  MAX_INTERACTIONS_PER_PAGE,
+} from "../scoring/vision-analyzer";
 import { extractLinksFromPage } from "../content/link-extractor";
 import { preCapturePage } from "../content/pre-capture";
 import { clickBySelector, clickAtPoint } from "../content/interact-and-capture";
+import { detectInteractiveElements } from "../content/detect-interactive";
+import { hoverBySelector, hoverAtPoint, clearHover } from "../content/hover-element";
 import { captureFullPage } from "./screenshot";
 import { updateJob, finishJob } from "./job-manager";
 import { createFigmaSession, sendPageToFigma, type FigmaSession } from "./figma-bridge";
@@ -285,57 +291,106 @@ async function capturePageAt(
     }
   }
 
-  // Vision-based dynamic state capture
-  if (options.useLlm) {
+  // Dynamic state capture: heuristic detection always runs; vision LLM
+  // is opt-in and merges its results with the heuristic ones.
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+
+    let elements: InteractiveElement[] = [];
     try {
-      const settings = await getSettings();
-      const providerCfg = settings.providers[settings.aiProvider];
-      if (providerCfg?.apiKey) {
-        await new Promise((r) => setTimeout(r, 300));
-        const viewportBlob = await captureViewportBlob(windowId);
-        const base64 = await blobToBase64(viewportBlob);
+      const heuristic = await execInTab(tabId, detectInteractiveElements);
+      if (Array.isArray(heuristic)) elements = heuristic;
+    } catch (err) {
+      console.warn("[auto-screenshotter] Heuristic detection failed", err);
+    }
 
-        const elements = await analyzePageForInteractiveElements({
-          screenshotBase64: base64,
-          provider: settings.aiProvider,
-          apiKey: providerCfg.apiKey,
-          model: providerCfg.model || undefined,
-        });
-
-        if (elements.length > 0) {
-          for (let si = 0; si < elements.length; si++) {
-            if (abortRequested) break;
-            const el = elements[si];
-
-            let clicked = false;
-            try {
-              clicked = await execInTabWithArg(tabId, clickBySelector, el.selector);
-            } catch {
-              clicked = false;
-            }
-            if (!clicked) {
-              try {
-                clicked = await execInTabWithArg(tabId, clickAtPoint, { x: el.x, y: el.y });
-              } catch {
-                clicked = false;
-              }
-            }
-            if (!clicked) continue;
-
-            await new Promise((r) => setTimeout(r, INTERACTION_SETTLE_MS));
-            const stateBlob = await captureViewportBlob(windowId);
-            const stateKey = `${baseKey}-state${si}`;
-            await putScreenshot(stateKey, stateBlob);
-            page.blobKeys!.push(stateKey);
-
-            await navigateAndWait(tabId, url);
-            await execInTab(tabId, preCapturePage).catch(() => null);
+    if (options.useLlm) {
+      try {
+        const settings = await getSettings();
+        const providerCfg = settings.providers[settings.aiProvider];
+        if (providerCfg?.apiKey) {
+          const viewportBlob = await captureViewportBlob(windowId);
+          const base64 = await blobToBase64(viewportBlob);
+          const llmElements = await analyzePageForInteractiveElements({
+            screenshotBase64: base64,
+            provider: settings.aiProvider,
+            apiKey: providerCfg.apiKey,
+            model: providerCfg.model || undefined,
+          });
+          const seen = new Set(elements.map((e) => e.selector));
+          for (const e of llmElements) {
+            if (seen.has(e.selector)) continue;
+            seen.add(e.selector);
+            elements.push({ ...e, source: "llm" });
           }
         }
+      } catch (err) {
+        console.warn("[auto-screenshotter] Vision analysis failed, continuing", err);
       }
-    } catch (err) {
-      console.warn("[auto-screenshotter] Vision analysis failed, continuing", err);
     }
+
+    elements = elements.slice(0, MAX_INTERACTIONS_PER_PAGE);
+
+    for (let si = 0; si < elements.length; si++) {
+      if (abortRequested) break;
+      const el = elements[si];
+
+      // --- Hover state ---
+      let hovered = false;
+      try {
+        hovered = await execInTabWithArg(tabId, hoverBySelector, el.selector);
+      } catch {
+        hovered = false;
+      }
+      if (!hovered) {
+        try {
+          hovered = await execInTabWithArg(tabId, hoverAtPoint, { x: el.x, y: el.y });
+        } catch {
+          hovered = false;
+        }
+      }
+      if (hovered) {
+        await new Promise((r) => setTimeout(r, INTERACTION_SETTLE_MS));
+        const hoverBlob = await captureViewportBlob(windowId);
+        const hoverKey = `${baseKey}-hover${si}`;
+        await putScreenshot(hoverKey, hoverBlob);
+        page.blobKeys!.push(hoverKey);
+      }
+
+      // Collapse hover state before clicking so the click captures the
+      // post-click state cleanly (some menus close on mouseleave).
+      await execInTab(tabId, clearHover).catch(() => null);
+
+      // --- Click state ---
+      let clicked = false;
+      try {
+        clicked = await execInTabWithArg(tabId, clickBySelector, el.selector);
+      } catch {
+        clicked = false;
+      }
+      if (!clicked) {
+        try {
+          clicked = await execInTabWithArg(tabId, clickAtPoint, { x: el.x, y: el.y });
+        } catch {
+          clicked = false;
+        }
+      }
+      if (clicked) {
+        await new Promise((r) => setTimeout(r, INTERACTION_SETTLE_MS));
+        const stateBlob = await captureViewportBlob(windowId);
+        const stateKey = `${baseKey}-state${si}`;
+        await putScreenshot(stateKey, stateBlob);
+        page.blobKeys!.push(stateKey);
+      }
+
+      // Reset page state for the next candidate. Skip on the last one.
+      if (si < elements.length - 1) {
+        await navigateAndWait(tabId, url);
+        await execInTab(tabId, preCapturePage).catch(() => null);
+      }
+    }
+  } catch (err) {
+    console.warn("[auto-screenshotter] Interactive capture failed, continuing", err);
   }
 
   return { page, links: extraction.links, contentHash: hash };

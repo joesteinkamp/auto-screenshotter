@@ -1,5 +1,10 @@
 import { useState } from "react";
-import type { AiProvider, ExtensionSettings, ProviderSettings } from "../types";
+import type {
+  AiProvider,
+  ExtensionSettings,
+  FigmaModeSettings,
+  ProviderSettings,
+} from "../types";
 import { saveSettings } from "../lib/storage";
 import { DEFAULT_MODELS } from "../scoring/llm-refiner";
 
@@ -31,7 +36,12 @@ export default function SettingsPanel({ settings, onChange }: Props) {
   const [providers, setProviders] = useState<Record<AiProvider, ProviderSettings>>(
     settings.providers,
   );
+  const [figmaMode, setFigmaMode] = useState<FigmaModeSettings>(settings.figmaMode);
   const [saved, setSaved] = useState(false);
+
+  const updateFigma = (patch: Partial<FigmaModeSettings>) => {
+    setFigmaMode((prev) => ({ ...prev, ...patch }));
+  };
 
   const current = providers[provider];
 
@@ -61,6 +71,11 @@ export default function SettingsPanel({ settings, onChange }: Props) {
       ...settings,
       aiProvider: provider,
       providers: trimmed,
+      figmaMode: {
+        ...figmaMode,
+        extensionId: figmaMode.extensionId.trim(),
+        defaultFileUrl: figmaMode.defaultFileUrl.trim(),
+      },
     };
     await saveSettings(updated);
     onChange(updated);
@@ -120,6 +135,72 @@ export default function SettingsPanel({ settings, onChange }: Props) {
       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
         Leave blank to use the default ({DEFAULT_MODELS[provider]}).
       </div>
+
+      <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid var(--border, #2a2a2a)" }} />
+
+      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input
+          type="checkbox"
+          checked={figmaMode.enabled}
+          onChange={(e) => updateFigma({ enabled: e.target.checked })}
+        />
+        Send captures to Figma (via web-to-figma)
+      </label>
+
+      {figmaMode.enabled && (
+        <>
+          <label htmlFor="figma-ext-id" style={{ marginTop: 10 }}>
+            web-to-figma extension ID
+          </label>
+          <input
+            id="figma-ext-id"
+            type="text"
+            placeholder="32-char extension id"
+            value={figmaMode.extensionId}
+            onChange={(e) => updateFigma({ extensionId: e.target.value })}
+          />
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+            Visit chrome://extensions and copy the ID shown under the web-to-figma extension.
+          </div>
+
+          <label htmlFor="figma-capture-type" style={{ marginTop: 10 }}>
+            Default capture type
+          </label>
+          <select
+            id="figma-capture-type"
+            value={figmaMode.defaultCaptureType}
+            onChange={(e) =>
+              updateFigma({ defaultCaptureType: e.target.value as FigmaModeSettings["defaultCaptureType"] })
+            }
+          >
+            <option value="standard">Standard</option>
+            <option value="designSystem">Design system</option>
+          </select>
+
+          <label htmlFor="figma-file-url" style={{ marginTop: 10 }}>
+            Default Figma file URL (optional)
+          </label>
+          <input
+            id="figma-file-url"
+            type="text"
+            placeholder="https://www.figma.com/file/..."
+            value={figmaMode.defaultFileUrl}
+            onChange={(e) => updateFigma({ defaultFileUrl: e.target.value })}
+          />
+          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+            When set, every capture lands in this file. Leave blank to create a new file per crawl.
+          </div>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10 }}>
+            <input
+              type="checkbox"
+              checked={figmaMode.chainCaptures}
+              onChange={(e) => updateFigma({ chainCaptures: e.target.checked })}
+            />
+            Send all pages from one crawl to the same Figma file
+          </label>
+        </>
+      )}
 
       <div className="row" style={{ marginTop: 10 }}>
         <button onClick={save}>{saved ? "Saved" : "Save"}</button>

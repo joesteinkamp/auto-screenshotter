@@ -37,6 +37,9 @@ export default function SettingsPanel({ settings, onChange }: Props) {
     settings.providers,
   );
   const [figmaMode, setFigmaMode] = useState<FigmaModeSettings>(settings.figmaMode);
+  const [maxInteractions, setMaxInteractions] = useState(
+    settings.defaultMaxInteractionsPerPage,
+  );
   const [saved, setSaved] = useState(false);
 
   const updateFigma = (patch: Partial<FigmaModeSettings>) => {
@@ -76,6 +79,7 @@ export default function SettingsPanel({ settings, onChange }: Props) {
         extensionId: figmaMode.extensionId.trim(),
         defaultFileUrl: figmaMode.defaultFileUrl.trim(),
       },
+      defaultMaxInteractionsPerPage: Math.min(12, Math.max(3, maxInteractions)),
     };
     await saveSettings(updated);
     onChange(updated);
@@ -134,6 +138,26 @@ export default function SettingsPanel({ settings, onChange }: Props) {
       />
       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
         Leave blank to use the default ({DEFAULT_MODELS[provider]}).
+      </div>
+
+      <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid var(--border, #2a2a2a)" }} />
+
+      <label htmlFor="max-interactions">
+        Interactive states per page: <strong>{maxInteractions}</strong>
+      </label>
+      <input
+        id="max-interactions"
+        type="range"
+        min={3}
+        max={12}
+        step={1}
+        value={maxInteractions}
+        onChange={(e) => setMaxInteractions(Number(e.target.value))}
+        style={{ width: "100%" }}
+      />
+      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+        Hover/click probes captured per page. Higher = more thorough but slower
+        (each adds ~3-4s).
       </div>
 
       <hr style={{ margin: "16px 0", border: "none", borderTop: "1px solid var(--border, #2a2a2a)" }} />

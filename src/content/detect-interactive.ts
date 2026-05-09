@@ -5,22 +5,33 @@
  * chrome.scripting.executeScript and executed in the page context, so it
  * cannot reference anything outside its own body.
  *
- * Returns up to MAX_HEURISTIC_INTERACTIONS candidates ranked by a confidence
- * score derived from ARIA, framework, structural, and visual signals.
+ * Returns up to `cap * 2` (or MAX_HEURISTIC_INTERACTIONS, whichever is larger)
+ * candidates ranked by a confidence score derived from ARIA, framework
+ * (Radix / Headless UI / React Aria), structural, and visual signals.
+ *
+ * Note on React: `el.onclick` reads the IDL property; React's synthetic
+ * event delegation does NOT set it. React triggers are caught indirectly
+ * via the className-pattern, role, tabindex, and cursor:pointer rules.
+ *
+ * Medium-score candidates may be confirmed via a short dynamic probe:
+ * dispatch pointerover/focus and watch a MutationObserver for DOM changes.
  */
 
 import type { InteractiveElement } from "../types";
 
-export const MAX_HEURISTIC_INTERACTIONS = 8;
+export const MAX_HEURISTIC_INTERACTIONS = 16;
 
-export function detectInteractiveElements(): InteractiveElement[] {
-  const MAX = 8;
+export async function detectInteractiveElements(cap: number): Promise<InteractiveElement[]> {
+  const MAX = Math.max(MAX_HEURISTIC_INTERACTIONS, (cap || 5) * 2);
 
   type Cand = {
     el: HTMLElement;
     score: number;
     description: string;
   };
+
+  const NATIVE_TAGS = new Set(["BUTTON", "A", "INPUT", "SELECT", "TEXTAREA", "SUMMARY"]);
+  const isNative = (el: Element): boolean => NATIVE_TAGS.has(el.tagName);
 
   const isVisible = (el: Element): boolean => {
     if (el.getAttribute("aria-hidden") === "true") return false;
@@ -107,7 +118,7 @@ export function detectInteractiveElements(): InteractiveElement[] {
     }
   };
 
-  // --- ARIA / role-based (high confidence: 80) ---
+  // --- ARIA / role-based (high confidence) ---
   document
     .querySelectorAll<HTMLElement>('[aria-haspopup]:not([aria-expanded="true"])')
     .forEach((el) => add(el, 90, "aria-haspopup"));
@@ -135,19 +146,80 @@ export function detectInteractiveElements(): InteractiveElement[] {
       if (hidden) add(el, 80, "aria-controls(hidden)");
     });
 
-  // --- Framework patterns (medium-high: 70) ---
+  // --- Framework markers (Radix / Headless UI / React Aria) ---
+  document
+    .querySelectorAll<HTMLElement>('[data-state="closed"]')
+    .forEach((el) => add(el, 92, "radix-state-closed"));
+
+  document
+    .querySelectorAll<HTMLElement>(
+      '[data-headlessui-state]:not([data-headlessui-state*="open"]), [id^="headlessui-"][aria-haspopup]',
+    )
+    .forEach((el) => add(el, 90, "headlessui-trigger"));
+
+  document
+    .querySelectorAll<HTMLElement>(
+      '[data-radix-collection-item][role="menuitem"], [data-radix-collection-item][role="tab"]:not([aria-selected="true"])',
+    )
+    .forEach((el) => add(el, 88, "radix-collection-item"));
+
+  document
+    .querySelectorAll<HTMLElement>(
+      '[role="button"], [role="link"], [role="menuitem"], [role="switch"], [role="checkbox"], [role="combobox"], [role="listbox"]',
+    )
+    .forEach((el) => {
+      if (isNative(el)) return;
+      add(el, 78, "role-button-nonnative");
+    });
+
+  // --- Bootstrap / data-toggle ---
   document
     .querySelectorAll<HTMLElement>("[data-toggle], [data-bs-toggle]")
     .forEach((el) => add(el, 75, "data-toggle"));
 
-  const classRe =
+  // --- Inline / property onclick ---
+  document
+    .querySelectorAll<HTMLElement>("div, span, li, section, article, header, nav, aside")
+    .forEach((el) => {
+      if ((el as unknown as { onclick: unknown }).onclick != null) {
+        add(el, 75, "onclick-prop");
+      }
+    });
+  document
+    .querySelectorAll<HTMLElement>("[onclick]")
+    .forEach((el) => {
+      if (isNative(el)) return;
+      add(el, 75, "onclick-attr");
+    });
+
+  // --- tabindex on non-interactive tag without role ---
+  document
+    .querySelectorAll<HTMLElement>('[tabindex="0"]')
+    .forEach((el) => {
+      if (isNative(el) || el.hasAttribute("role")) return;
+      add(el, 70, "tabindex-nonnative");
+    });
+
+  // --- Class-name patterns: Bootstrap / shadcn / Radix / Headless UI ---
+  const legacyClassRe =
     /(^|[\s_-])(dropdown|accordion|hamburger|menu-toggle|nav-toggle|disclosure|collapse)(-toggle)?($|[\s_-])/i;
+  // PascalCase classnames (from CSS-in-JS / CSS modules) where a known
+  // trigger keyword appears as a sub-token, e.g. "DropdownMenuTrigger".
+  // Case-sensitive; lowercase/kebab forms are caught by legacyClassRe.
+  const triggerClassRe =
+    /(?:^|[\s_-])[A-Za-z]*(?:Trigger|Toggle|Disclosure|Popover|Dropdown|Combobox|Listbox|Switch|Tabs)[A-Za-z]*(?:$|[\s_-])/;
   document.querySelectorAll<HTMLElement>("[class]").forEach((el) => {
     const klass = el.getAttribute("class") || "";
-    if (classRe.test(klass)) add(el, 65, "class-pattern");
+    if (legacyClassRe.test(klass)) add(el, 65, "class-pattern");
+    if (triggerClassRe.test(klass)) add(el, 68, "classname-trigger");
   });
 
-  // --- Structural: nav/header items with hidden submenus (medium: 60) ---
+  // --- React Aria Components ---
+  document
+    .querySelectorAll<HTMLElement>("[data-rac][data-pressed], [data-rac][role='button']")
+    .forEach((el) => add(el, 65, "rac-pressable"));
+
+  // --- Structural: nav/header items with hidden submenus ---
   document
     .querySelectorAll<HTMLElement>('nav li, header li, [role="menubar"] > *')
     .forEach((el) => {
@@ -160,11 +232,35 @@ export function detectInteractiveElements(): InteractiveElement[] {
         parseFloat(ss.opacity || "1") === 0 ||
         sub.getAttribute("aria-hidden") === "true";
       if (!hidden) return;
-      // Score the trigger (link or button), not the li wrapper.
       const trigger =
         el.querySelector<HTMLElement>("a, button, [role='button']") || el;
       add(trigger, 70, "nav-submenu");
     });
+
+  // --- Cursor: pointer + button-shaped non-native element (last, cheapest signal) ---
+  let cursorScanned = 0;
+  const cursorRoots = document.querySelectorAll<HTMLElement>("div, span, li, section");
+  for (const el of cursorRoots) {
+    if (cursorScanned++ > 4000) break;
+    if (isNative(el)) continue;
+    const cs = window.getComputedStyle(el);
+    if (cs.cursor !== "pointer") continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 24 || rect.width > 400) continue;
+    if (rect.height < 16 || rect.height > 80) continue;
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (text.length > 40) continue;
+    // Skip if it already contains a higher-priority candidate (button-in-button noise).
+    let containsCand = false;
+    for (const k of candidates.keys()) {
+      if (k !== el && el.contains(k)) {
+        containsCand = true;
+        break;
+      }
+    }
+    if (containsCand) continue;
+    add(el, 60, "cursor-pointer-buttonlike");
+  }
 
   // --- Visual hint: chevron/caret descendants give +5 ---
   const chevronRe = /chevron|caret|arrow-down|expand/i;
@@ -175,6 +271,106 @@ export function detectInteractiveElements(): InteractiveElement[] {
     if (hasChevron) cand.score += 5;
     const ownClass = cand.el.getAttribute("class") || "";
     if (chevronRe.test(ownClass)) cand.score += 3;
+  }
+
+  // --- Dynamic probing tiebreaker for medium-score candidates ---
+  // Only runs when total candidates exceed `cap` (otherwise we'll keep them all
+  // anyway). Probes up to ~10 medium-band elements with a synthetic
+  // hover+focus, watching a MutationObserver to confirm they trigger DOM changes.
+  const MEDIUM_LO = 50;
+  const MEDIUM_HI = 70;
+  const PER_PROBE_MS = 120;
+  const MAX_PROBES = 10;
+
+  if (candidates.size > cap) {
+    const definite = Array.from(candidates.values()).filter((c) => c.score > MEDIUM_HI);
+    const medium = Array.from(candidates.values())
+      .filter((c) => c.score >= MEDIUM_LO && c.score <= MEDIUM_HI)
+      .sort((a, b) => b.score - a.score);
+
+    if (definite.length < cap && medium.length > 0) {
+      const probeCount = Math.min(MAX_PROBES, cap - definite.length + 4, medium.length);
+      const observer = new MutationObserver(() => {});
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: [
+          "style",
+          "class",
+          "aria-expanded",
+          "aria-hidden",
+          "data-state",
+          "data-headlessui-state",
+          "hidden",
+          "open",
+        ],
+      });
+
+      const dispatchHover = (el: HTMLElement, x: number, y: number): void => {
+        const opts: MouseEventInit = {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          view: window,
+        };
+        el.dispatchEvent(new PointerEvent("pointerover", { ...opts, pointerType: "mouse" }));
+        el.dispatchEvent(new PointerEvent("pointerenter", { ...opts, pointerType: "mouse" }));
+        el.dispatchEvent(new MouseEvent("mouseover", opts));
+        el.dispatchEvent(new MouseEvent("mouseenter", opts));
+        el.dispatchEvent(new MouseEvent("mousemove", opts));
+      };
+
+      const clearHoverInline = (): void => {
+        const hovered = Array.from(
+          document.querySelectorAll<HTMLElement>(":hover"),
+        ).reverse();
+        const opts: MouseEventInit = {
+          bubbles: true,
+          cancelable: true,
+          clientX: -1,
+          clientY: -1,
+          view: window,
+        };
+        for (const el of hovered) {
+          el.dispatchEvent(new MouseEvent("mouseout", opts));
+          el.dispatchEvent(new MouseEvent("mouseleave", opts));
+          el.dispatchEvent(new PointerEvent("pointerout", { ...opts, pointerType: "mouse" }));
+          el.dispatchEvent(new PointerEvent("pointerleave", { ...opts, pointerType: "mouse" }));
+        }
+        document.body.dispatchEvent(new MouseEvent("mousemove", opts));
+      };
+
+      try {
+        for (let i = 0; i < probeCount; i++) {
+          const cand = medium[i];
+          observer.takeRecords();
+          const rect = cand.el.getBoundingClientRect();
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          try {
+            dispatchHover(cand.el, cx, cy);
+            cand.el.focus({ preventScroll: true });
+          } catch {
+            // ignore
+          }
+          await new Promise((r) => setTimeout(r, PER_PROBE_MS));
+          const mutated = observer.takeRecords().length > 0;
+          cand.score += mutated ? 15 : -10;
+
+          // Cleanup so probes don't compound.
+          try {
+            clearHoverInline();
+            (document.activeElement as HTMLElement | null)?.blur?.();
+          } catch {
+            // ignore
+          }
+        }
+      } finally {
+        observer.disconnect();
+      }
+    }
   }
 
   // Sort, dedupe by ancestor (skip if an ancestor candidate scored higher),

@@ -69,6 +69,7 @@ function defaultOptions(): CrawlOptions {
     useLlm: false,
     requestDelayMs: 1000,
     scrollBehavior: "combine",
+    maxInteractionsPerPage: 5,
   };
 }
 
@@ -296,9 +297,15 @@ async function capturePageAt(
   try {
     await new Promise((r) => setTimeout(r, 300));
 
+    const interactionsCap = options.maxInteractionsPerPage ?? MAX_INTERACTIONS_PER_PAGE;
+
     let elements: InteractiveElement[] = [];
     try {
-      const heuristic = await execInTab(tabId, detectInteractiveElements);
+      const heuristic = await execInTabWithArg(
+        tabId,
+        detectInteractiveElements,
+        interactionsCap,
+      );
       if (Array.isArray(heuristic)) elements = heuristic;
     } catch (err) {
       console.warn("[auto-screenshotter] Heuristic detection failed", err);
@@ -329,7 +336,7 @@ async function capturePageAt(
       }
     }
 
-    elements = elements.slice(0, MAX_INTERACTIONS_PER_PAGE);
+    elements = elements.slice(0, interactionsCap);
 
     for (let si = 0; si < elements.length; si++) {
       if (abortRequested) break;

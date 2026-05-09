@@ -112,6 +112,7 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   defaultMaxDepth: 4,
   defaultRequestDelayMs: 1000,
   defaultScrollBehavior: "combine",
+  defaultMaxInteractionsPerPage: 5,
   figmaMode: {
     enabled: false,
     extensionId: "",

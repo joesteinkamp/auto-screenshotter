@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
@@ -15,5 +16,12 @@ export default defineConfig({
     hmr: {
       port: 5173,
     },
+  },
+  test: {
+    environment: "jsdom",
+    environmentMatchGlobs: [
+      ["src/lib/**", "node"],
+      ["src/scoring/heuristics.test.ts", "node"],
+    ],
   },
 });
